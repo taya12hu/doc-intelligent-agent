@@ -1,0 +1,38 @@
+{
+  "name": "doc-intelligent-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Messy vendor invoices -> validated structured records a human can review and correct.",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/shared",
+    "apps/api",
+    "apps/web",
+    "samples/generate"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace @dia/api",
+    "dev:web": "npm run dev --workspace @dia/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "samples:generate": "npm run generate --workspace @dia/samples",
+    "extract": "npm run extract --workspace @dia/api --",
+    "prepare:doc": "npm run prepare:doc --workspace @dia/api --",
+    "check:models": "npm run check:models --workspace @dia/api",
+    "db:generate": "npm run db:generate --workspace @dia/api",
+    "db:migrate": "npm run db:migrate --workspace @dia/api",
+    "eval": "npm run eval --workspace @dia/api"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

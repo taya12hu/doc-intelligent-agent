@@ -1,0 +1,11 @@
+# Normalize line endings so the repo is identical on Windows and Linux.
+* text=auto eol=lf
+
+# Binary sample inputs must never be line-ending mangled — a "fixed" byte in
+# a PDF or an xlsx is a corrupted file, and these are the fixtures the whole
+# extraction story rests on.
+*.pdf   binary
+*.xlsx  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary

@@ -1,0 +1,38 @@
+{
+  "name": "@dia/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "check:models": "tsx src/scripts/checkModels.ts",
+    "prepare:doc": "tsx src/scripts/prepareDoc.ts",
+    "extract": "tsx src/scripts/extractCli.ts",
+    "eval": "tsx src/scripts/eval.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@dia/shared": "*",
+    "@google/genai": "^2.19.0",
+    "@supabase/supabase-js": "^2.112.4",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.23",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.45.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0",
+    "pdfjs-dist": "^6.3.289",
+    "postgres": "^3.4.9",
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^2.0.0",
+    "drizzle-kit": "^0.31.10"
+  }
+}
