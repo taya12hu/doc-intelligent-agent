@@ -146,6 +146,25 @@ export const ExtractionMetaSchema = z.object({
       'How legible the source was overall, 0 to 1. 1 = clean digital text. ' +
         '0.5 = a poor scan you had to work at. 0.2 = mostly unreadable.',
     ),
+  /**
+   * The date EXACTLY as printed, before ISO conversion.
+   *
+   * Without this, `MM/DD` vs `DD/MM` ambiguity is undetectable. Once the model
+   * has normalised `08/03/2025` to `2025-08-03`, nothing downstream can tell
+   * whether that was a reading or a coin flip — the ISO string looks equally
+   * confident either way. Keeping the printed form lets `checks.ts` see two
+   * components both <= 12 and flag it, which is the honest answer: the
+   * ambiguity is a property of the document and cannot be resolved from it.
+   */
+  invoiceDateAsPrinted: z
+    .string()
+    .nullable()
+    .describe(
+      'The invoice date EXACTLY as it appears on the document, before you ' +
+        'converted it to ISO. e.g. "14-Mar-2025", "08/03/2025", "March 12, 2025". ' +
+        'null if you could not find a date.',
+    ),
+
   /** Free text, e.g. "a discount row and a GST row sit above the total". */
   notes: z
     .string()
