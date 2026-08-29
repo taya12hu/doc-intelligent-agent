@@ -163,7 +163,12 @@ const scoreSample = (
   const shruggedOff = truth.mustFlag
     .filter((m) => {
       const outcome = outcomes.find((o) => o.field === m.field);
-      return outcome?.bucket === 'correct';
+      // Correct AND unflagged. A field can be both correct and flagged —
+      // an ambiguous date read the right way is still ambiguous — and that
+      // is the system working, not shrugging anything off. Reporting those
+      // here made the note claim four difficulties were missed when only
+      // one actually was.
+      return outcome?.bucket === 'correct' && !isFlagged(m.field);
     })
     .map((m) => m.field);
 

@@ -17,7 +17,7 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 14551
+      "latencyMs": 17941
     },
     {
       "attempt": 1,
@@ -25,13 +25,13 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 23907
+      "latencyMs": 22989
     }
   ],
-  "latencyMs": 38458,
+  "latencyMs": 40930,
   "usage": {
     "inputTokens": 2638,
-    "outputTokens": 697
+    "outputTokens": 674
   },
   "invoice": {
     "vendorName": "BLUE RIDGE FABRICATION LLC",
@@ -54,7 +54,7 @@
       {
         "description": "Powder Coating, Matte Black",
         "quantity": 22,
-        "unitPrice": null,
+        "unitPrice": 43.75,
         "lineTotal": 962.5
       },
       {
@@ -66,48 +66,28 @@
     ],
     "subtotal": 3942.5,
     "discountTotal": null,
-    "taxTotal": null,
+    "taxTotal": 236.55,
     "grandTotal": null
   },
   "meta": {
     "illegibleFields": [
-      "lineItems[2].unitPrice",
-      "taxTotal",
       "grandTotal"
     ],
-    "legibility": 0.5,
+    "legibility": 0.6,
     "invoiceDateAsPrinted": "08/03/2025",
-    "notes": "Scanned document with noise, low contrast, and a dark circular stain obscuring the sales tax and total due values."
+    "notes": "A dark smudge covers the grand total value, rendering it illegible."
   },
   "flags": [
     {
       "field": "taxTotal",
       "reason": "disagreement",
       "severity": "error",
-      "detail": "all passes differed: null / 315.4 — took the deterministic pass"
-    },
-    {
-      "field": "lineItems[2].unitPrice",
-      "reason": "disagreement",
-      "severity": "error",
-      "detail": "all passes differed: null / 43.75 — took the deterministic pass"
+      "detail": "all passes differed: 236.55 / 315.4 — took the deterministic pass"
     },
     {
       "field": "grandTotal",
       "reason": "missing",
       "severity": "warn"
-    },
-    {
-      "field": "lineItems[2].unitPrice",
-      "reason": "illegible_source",
-      "severity": "error",
-      "detail": "the model reported this region as unreadable"
-    },
-    {
-      "field": "taxTotal",
-      "reason": "illegible_source",
-      "severity": "error",
-      "detail": "the model reported this region as unreadable"
     },
     {
       "field": "grandTotal",
@@ -122,14 +102,12 @@
       "detail": "\"08/03/2025\" could be 8 Mar 2025 or 3 Aug 2025; read as 3 Aug 2025"
     }
   ],
-  "confidence": 0.08,
-  "status": "failed",
+  "confidence": 0.36,
+  "status": "needs_review",
   "raw": {
-    "notes": "Scanned document with noise, low contrast, and a dark circular stain obscuring the sales tax and total due values.",
-    "legibility": 0.5,
+    "notes": "A dark smudge covers the grand total value, rendering it illegible.",
+    "legibility": 0.6,
     "illegibleFields": [
-      "lineItems[2].unitPrice",
-      "taxTotal",
       "grandTotal"
     ],
     "invoiceDateAsPrinted": "08/03/2025",
@@ -150,7 +128,7 @@
       "lineItems[1].unitPrice": "unanimous",
       "lineItems[1].lineTotal": "unanimous",
       "lineItems[2].quantity": "unanimous",
-      "lineItems[2].unitPrice": "split",
+      "lineItems[2].unitPrice": "unanimous",
       "lineItems[2].lineTotal": "unanimous",
       "lineItems[3].quantity": "unanimous",
       "lineItems[3].unitPrice": "unanimous",
@@ -178,7 +156,7 @@
           {
             "description": "Powder Coating, Matte Black",
             "quantity": 22,
-            "unitPrice": null,
+            "unitPrice": 43.75,
             "lineTotal": 962.5
           },
           {
@@ -190,7 +168,7 @@
         ],
         "subtotal": 3942.5,
         "discountTotal": null,
-        "taxTotal": null,
+        "taxTotal": 236.55,
         "grandTotal": null
       },
       {

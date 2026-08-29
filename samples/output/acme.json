@@ -17,7 +17,7 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 15917
+      "latencyMs": 45230
     },
     {
       "attempt": 1,
@@ -25,13 +25,13 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 9349
+      "latencyMs": 16366
     }
   ],
-  "latencyMs": 25266,
+  "latencyMs": 61596,
   "usage": {
     "inputTokens": 2378,
-    "outputTokens": 510
+    "outputTokens": 500
   },
   "invoice": {
     "vendorName": "ACME SUPPLIES INC.",

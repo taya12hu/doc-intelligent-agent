@@ -17,7 +17,7 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 23249
+      "latencyMs": 11090
     },
     {
       "attempt": 1,
@@ -25,13 +25,13 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 15586
+      "latencyMs": 43435
     }
   ],
-  "latencyMs": 38835,
+  "latencyMs": 54525,
   "usage": {
     "inputTokens": 3032,
-    "outputTokens": 694
+    "outputTokens": 689
   },
   "invoice": {
     "vendorName": "ZENITH PARTS & COMPONENTS",
@@ -87,7 +87,7 @@
     ],
     "legibility": 1,
     "invoiceDateAsPrinted": "27/02/2025",
-    "notes": "Invoice contains two line item sections (Machined Components and Fasteners). Amount cell for Lock Washer M10 is empty on the document."
+    "notes": "Lock Washer M10 amount cell is blank in the source document."
   },
   "flags": [
     {
@@ -106,7 +106,7 @@
   "confidence": 0.8,
   "status": "needs_review",
   "raw": {
-    "notes": "Invoice contains two line item sections (Machined Components and Fasteners). Amount cell for Lock Washer M10 is empty on the document.",
+    "notes": "Lock Washer M10 amount cell is blank in the source document.",
     "legibility": 1,
     "illegibleFields": [
       "lineItems[4].lineTotal"

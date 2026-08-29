@@ -32,7 +32,12 @@ add up.
 
 ## Setup
 
-Needs Node 20+, a Gemini API key (free tier is enough), and a Supabase project.
+Needs Node 20+, a Gemini API key, and a Supabase project.
+
+The free tier works but is **20 requests per day per model**, which is roughly two full eval
+runs. If you plan to click around much, either enable billing or drop `EXTRACTION_SAMPLES` to
+`1`. This is the single most annoying constraint on the project and it's covered properly under
+[limitations](#known-limitations).
 
 ```bash
 npm install
@@ -51,10 +56,13 @@ the model list, because being listed doesn't mean being callable — on a free-t
 frequently 503, yet both appear in `listModels()`. If it fails, it prints what you *can* use.
 
 ```bash
-npm run samples:generate   # writes the 4 sample invoices to samples/input/
-npm run db:migrate         # applies the schema and creates the storage bucket
-npm run dev                # API on :4000, web on :5173
+npm run db:migrate   # applies the schema and creates the storage bucket
+npm run dev          # API on :4000, web on :5173
 ```
+
+The four sample invoices are already committed in `samples/input/`, so there's nothing to
+generate. (`npm run samples:generate` rebuilds them from the fixture — useful if you want to
+change the difficulty, not needed to run the thing.)
 
 Open http://localhost:5173 and use a **Try a sample** button. Start with **Blue Ridge
 (scanned)** — that's the one designed to fail informatively.
@@ -295,15 +303,28 @@ myself**, so it measures "does the machinery behave as designed on its own fixtu
 real-world accuracy. What it does establish is the property the whole system is built around:
 nothing was wrong *and* silent.
 
-Two honest notes:
+Flags actually raised on the two hard documents:
 
-- On this run both passes read the degraded unit price (`43.75`) and the clipped tax value
-  (`236.55`) correctly, so no disagreement flag fired on them. The fixture lists them as planted
-  difficulties and the eval reports that they were shrugged off — **as information, not a
-  failure.** An earlier version of the scorer failed the run for this, which had it marking the
-  system down for succeeding.
-- Blue Ridge's numbers vary between runs. That's the point of the sample; the *status* has been
-  stable at `needs_review`.
+```
+blueridge   [error] taxTotal                disagreement
+            [warn]  grandTotal              missing
+            [error] grandTotal              illegible_source
+            [warn]  invoiceDate             ambiguous_date
+zenith      [warn]  lineItems[4].lineTotal  missing
+            [error] lineItems[4].lineTotal  illegible_source
+```
+
+Three of the four planted difficulties on Blue Ridge were caught, plus Zenith's blank cell. The
+fourth — row 3's unit price — both passes read correctly (`43.75`), so nothing fired. The eval
+reports that as **information, not a failure**: the guarantee is *correct or flagged*, and it
+was correct. An earlier version of the scorer failed the run for this, which had it marking the
+system down for succeeding.
+
+**Blue Ridge varies between runs** — `needs_review` at 36–49% confidence, occasionally `failed`
+at 8% when both passes decline more of the stained values. Both are correct behaviour: the
+system refusing to trust what it can't read. It does mean this row isn't reproducible to the
+digit, which is the honest cost of a genuinely ambiguous document, and I'd rather say so than
+show you a hand-picked run.
 
 The eval exits non-zero if anything is silently wrong, so it works as a gate.
 

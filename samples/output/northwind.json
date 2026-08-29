@@ -17,7 +17,7 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 8212
+      "latencyMs": 10223
     },
     {
       "attempt": 1,
@@ -25,10 +25,10 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 11832
+      "latencyMs": 9391
     }
   ],
-  "latencyMs": 20044,
+  "latencyMs": 19614,
   "usage": {
     "inputTokens": 2378,
     "outputTokens": 530
