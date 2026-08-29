@@ -6,6 +6,7 @@ import { errorHandler } from './lib/errors.js';
 import { documentsRouter } from './routes/documents.js';
 import { extractionsRouter } from './routes/extractions.js';
 import { lineItemsRouter } from './routes/lineItems.js';
+import { samplesRouter } from './routes/samples.js';
 import { ensureBucket } from './storage/index.js';
 
 /**
@@ -28,6 +29,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/documents', documentsRouter);
 app.use('/api/extractions', extractionsRouter);
 app.use('/api/line-items', lineItemsRouter);
+app.use('/api/samples', samplesRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: { code: 'not_found', message: 'No such endpoint' } });
