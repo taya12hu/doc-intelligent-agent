@@ -1,4 +1,4 @@
-import type { ExtractionEnvelope, Invoice, LineItem } from '@dia/shared';
+import { flagHeadline, type ExtractionEnvelope, type Invoice, type LineItem } from '@dia/shared';
 import { describe, expect, it } from 'vitest';
 import { buildConsensus, similarity } from './consensus.js';
 
@@ -50,6 +50,15 @@ describe('buildConsensus', () => {
     // "disagreement".
     expect(f?.detail).toContain('4179.05');
     expect(f?.detail).toContain('4779.05');
+  });
+
+  it('never claims more passes than were actually run', () => {
+    // The flag headline used to read "All three extraction passes..." on a
+    // two-pass run. A small lie, in the one place the system is supposed to be
+    // scrupulous about what it actually observed.
+    const r = buildConsensus([envelope({ grandTotal: 1 }), envelope({ grandTotal: 2 })]);
+    const f = r.flags.find((x) => x.field === 'grandTotal');
+    expect(flagHeadline(f!.reason)).not.toMatch(/three/i);
   });
 
   it('escalates a three-way split to an error and keeps the deterministic pass', () => {

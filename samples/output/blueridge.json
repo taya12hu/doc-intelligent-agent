@@ -17,7 +17,7 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 22472
+      "latencyMs": 14551
     },
     {
       "attempt": 1,
@@ -25,13 +25,13 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 15255
+      "latencyMs": 23907
     }
   ],
-  "latencyMs": 37727,
+  "latencyMs": 38458,
   "usage": {
     "inputTokens": 2638,
-    "outputTokens": 531
+    "outputTokens": 697
   },
   "invoice": {
     "vendorName": "BLUE RIDGE FABRICATION LLC",
@@ -54,7 +54,7 @@
       {
         "description": "Powder Coating, Matte Black",
         "quantity": 22,
-        "unitPrice": 43.75,
+        "unitPrice": null,
         "lineTotal": 962.5
       },
       {
@@ -66,25 +66,51 @@
     ],
     "subtotal": 3942.5,
     "discountTotal": null,
-    "taxTotal": 236.55,
+    "taxTotal": null,
     "grandTotal": null
   },
   "meta": {
     "illegibleFields": [
-      "invoice.grandTotal"
+      "lineItems[2].unitPrice",
+      "taxTotal",
+      "grandTotal"
     ],
-    "legibility": 0.65,
+    "legibility": 0.5,
     "invoiceDateAsPrinted": "08/03/2025",
-    "notes": "The final Total Due amount is obscured by a heavy dark stain/smudge. Document is a low-resolution blurred scan."
+    "notes": "Scanned document with noise, low contrast, and a dark circular stain obscuring the sales tax and total due values."
   },
   "flags": [
+    {
+      "field": "taxTotal",
+      "reason": "disagreement",
+      "severity": "error",
+      "detail": "all passes differed: null / 315.4 — took the deterministic pass"
+    },
+    {
+      "field": "lineItems[2].unitPrice",
+      "reason": "disagreement",
+      "severity": "error",
+      "detail": "all passes differed: null / 43.75 — took the deterministic pass"
+    },
     {
       "field": "grandTotal",
       "reason": "missing",
       "severity": "warn"
     },
     {
-      "field": "invoice.grandTotal",
+      "field": "lineItems[2].unitPrice",
+      "reason": "illegible_source",
+      "severity": "error",
+      "detail": "the model reported this region as unreadable"
+    },
+    {
+      "field": "taxTotal",
+      "reason": "illegible_source",
+      "severity": "error",
+      "detail": "the model reported this region as unreadable"
+    },
+    {
+      "field": "grandTotal",
       "reason": "illegible_source",
       "severity": "error",
       "detail": "the model reported this region as unreadable"
@@ -96,13 +122,15 @@
       "detail": "\"08/03/2025\" could be 8 Mar 2025 or 3 Aug 2025; read as 3 Aug 2025"
     }
   ],
-  "confidence": 0.49,
-  "status": "needs_review",
+  "confidence": 0.08,
+  "status": "failed",
   "raw": {
-    "notes": "The final Total Due amount is obscured by a heavy dark stain/smudge. Document is a low-resolution blurred scan.",
-    "legibility": 0.65,
+    "notes": "Scanned document with noise, low contrast, and a dark circular stain obscuring the sales tax and total due values.",
+    "legibility": 0.5,
     "illegibleFields": [
-      "invoice.grandTotal"
+      "lineItems[2].unitPrice",
+      "taxTotal",
+      "grandTotal"
     ],
     "invoiceDateAsPrinted": "08/03/2025",
     "agreement": {
@@ -112,7 +140,7 @@
       "currency": "unanimous",
       "subtotal": "unanimous",
       "discountTotal": "unanimous",
-      "taxTotal": "unanimous",
+      "taxTotal": "split",
       "grandTotal": "unanimous",
       "lineItems": "unanimous",
       "lineItems[0].quantity": "unanimous",
@@ -122,7 +150,7 @@
       "lineItems[1].unitPrice": "unanimous",
       "lineItems[1].lineTotal": "unanimous",
       "lineItems[2].quantity": "unanimous",
-      "lineItems[2].unitPrice": "unanimous",
+      "lineItems[2].unitPrice": "split",
       "lineItems[2].lineTotal": "unanimous",
       "lineItems[3].quantity": "unanimous",
       "lineItems[3].unitPrice": "unanimous",
@@ -150,7 +178,7 @@
           {
             "description": "Powder Coating, Matte Black",
             "quantity": 22,
-            "unitPrice": 43.75,
+            "unitPrice": null,
             "lineTotal": 962.5
           },
           {
@@ -162,7 +190,7 @@
         ],
         "subtotal": 3942.5,
         "discountTotal": null,
-        "taxTotal": 236.55,
+        "taxTotal": null,
         "grandTotal": null
       },
       {
@@ -198,7 +226,7 @@
         ],
         "subtotal": 3942.5,
         "discountTotal": null,
-        "taxTotal": 236.55,
+        "taxTotal": 315.4,
         "grandTotal": null
       }
     ]

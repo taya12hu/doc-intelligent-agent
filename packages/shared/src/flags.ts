@@ -102,7 +102,11 @@ const HEADLINES: Record<FlagReason, string> = {
   row_math_mismatch: "This row's quantity x price doesn't match its total",
   ambiguous_date: 'Ambiguous date format',
   low_agreement: 'The extraction passes disagreed here',
-  disagreement: 'All three extraction passes returned different values',
+  // Deliberately not "all three": EXTRACTION_SAMPLES is configurable and
+  // defaults to 2. Hard-coding the count produced "All three extraction
+  // passes..." on a two-pass run, which is a small lie in the one place the
+  // system is supposed to be scrupulous about what it actually observed.
+  disagreement: 'Every extraction pass returned a different value',
   repair_required: 'The model output had to be repaired before it validated',
   truncated: 'The model ran out of room and the output was cut off',
   low_legibility: 'The source scan is poor quality overall',
