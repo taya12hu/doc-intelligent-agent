@@ -30,10 +30,16 @@ const EnvSchema = z.object({
   GEMINI_ESCALATION_MODEL: z.string().default('gemini-2.5-pro'),
 
   /**
-   * Independent extraction passes to vote across. 3 is the design (see
-   * ARCHITECTURE.md §5.6); 1 disables self-consistency for fast iteration.
+   * Independent extraction passes to vote across.
+   *
+   * 3 is the design (ARCHITECTURE.md §5.6) but the default is 2, because the
+   * Gemini free tier is 20 requests PER DAY per model — 3 passes means a
+   * single eval run consumes 12 of them. 2 still measures instability; it
+   * just grades every disagreement as an error rather than distinguishing a
+   * 2-of-3 majority from a 3-way split. 1 disables self-consistency, leaving
+   * the arithmetic checks, which are the stronger signal anyway.
    */
-  EXTRACTION_SAMPLES: z.coerce.number().int().min(1).max(5).default(3),
+  EXTRACTION_SAMPLES: z.coerce.number().int().min(1).max(5).default(2),
 
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),

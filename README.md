@@ -278,9 +278,19 @@ SILENTLY WRONG wrong, and we claimed otherwise    ← the only number that matte
   no per-character confidence to lean on — a page Gemini can't read is a page we can't read.
 - **`MM/DD` vs `DD/MM` is guessed and flagged, not resolved.** It cannot be resolved from a
   single document without vendor context.
-- **Free-tier rate limits are tight** (5 req/min/model), and 3 passes per document sits close to
-  the ceiling. Passes run sequentially and honour Gemini's own retry-after hint, so a limit costs
-  time rather than the extraction — but a document needing repair calls will feel slow.
+- **The Gemini free tier is 20 requests per _day_ per model**, and this is the single biggest
+  practical constraint on the project. The 5-per-minute limit is the one you hit first and it is
+  *not* the binding one — I lost real time retrying a daily cap that was never going to clear.
+  The whole daily budget is 5 eval runs at `EXTRACTION_SAMPLES=1`, 2 at `=2`, or 1 at `=3`,
+  before any repair calls or clicking around the UI. The provider now detects a daily
+  exhaustion and fails immediately with a clear message rather than waiting out four windows
+  against a cap that resets at midnight. **Default is 2** — 3 is the better design and what
+  §5.6 describes, but a reviewer who clones this and immediately cannot run it is a worse
+  outcome than losing the 2-of-3 nuance.
+- **A pass lost to quota legitimately downgrades the record.** If one of the passes fails, the
+  consensus is built from the rest and the record carries `1 of 3 extraction passes failed;
+  consensus is based on 2` — which flips it to `needs_review`. That is the system being honest
+  rather than a bug, but it means status can vary run to run on a constrained key.
 - **Single-currency assumption** in the arithmetic checks. Mixed-currency invoices are flagged,
   not handled.
 - **Long invoices** can hit `MAX_TOKENS` mid-JSON. We detect it, recover what's complete, flag

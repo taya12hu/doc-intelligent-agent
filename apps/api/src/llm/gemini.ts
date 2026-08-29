@@ -46,6 +46,27 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * the server has published the answer is how you turn a 40-second wait into
  * a failed extraction.
  */
+/**
+ * Is this a DAILY quota exhaustion rather than a per-minute burst limit?
+ *
+ * The distinction is the difference between "wait 40 seconds" and "come back
+ * tomorrow", and Gemini reports both as a 429 with a `retryDelay` of a few
+ * seconds — which is actively misleading for the daily one.
+ *
+ * I lost real time to this: the free tier is 20 requests per DAY per model
+ * (not the 5-per-minute limit that shows up first), and the retry logic
+ * cheerfully waited out four 60-second windows against a cap that resets at
+ * midnight. Retrying a daily quota is pure waste, so we fail immediately with
+ * a message that says what actually happened.
+ */
+const isDailyQuotaExhausted = (err: unknown): boolean => {
+  const text =
+    typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message: unknown }).message)
+      : String(err);
+  return /PerDay/i.test(text) || /RequestsPerDay/i.test(text);
+};
+
 const parseRetryDelayMs = (err: unknown): number | null => {
   const text =
     typeof err === 'object' && err !== null && 'message' in err
@@ -140,6 +161,18 @@ export const createGeminiProvider = (apiKey = env.GEMINI_API_KEY): LLMProvider =
           lastError = err;
 
           if (err instanceof ProviderTransportError && !err.retryable) throw err;
+
+          // A daily cap does not clear by waiting. Say so and stop.
+          if (isDailyQuotaExhausted(err)) {
+            throw new ProviderTransportError(
+              `Gemini daily free-tier quota exhausted for ${opts.model} ` +
+                `(20 requests/day/model). This resets at midnight Pacific — it will NOT ` +
+                `clear by retrying. Either wait, enable billing, or set ` +
+                `EXTRACTION_SAMPLES=1 to spend a quarter as many requests.`,
+              429,
+              false,
+            );
+          }
 
           const status = statusOf(err);
           const retryable = status === undefined || RETRYABLE_STATUS.has(status);
