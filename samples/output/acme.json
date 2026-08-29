@@ -1,0 +1,228 @@
+{
+  "classification": {
+    "kind": "pdf_text",
+    "charsPerPage": 677,
+    "pageCount": 1,
+    "textLayer": "ACME SUPPLIES INC. 1420 Kingsway Avenue, Suite 300 Portland, OR 97205 accounts@acmesupplies.example · (503) 555-0142 INVOICE Invoice # Invoice Date Payment Terms INV-2025-0417 March 12, 2025 Net 30 BILL TO Harborline Logistics 88 Wharf Road Seattle, WA 98104 Description Qty Unit Price Amount A4 Copier Paper, 80gsm (ream) 40 4.25 170.00 Ballpoint Pens, blue (box of 50) 12 8.90 106.80 Manila Folders, foolscap (pack of 100) 6 14.50 87.00 Desk Organiser, mesh black 3 22.00 66.00 Subtotal $429.80 Sales Tax (8.25%) $35.46 Total Due $465.26 Payment due within 30 days. Remit to Acme Supplies Inc., account 4471-88201, Cascadia Bank. Please quote the invoice number with payment."
+  },
+  "provider": "gemini",
+  "model": "gemini-3.6-flash",
+  "escalatedTo": null,
+  "samples": 3,
+  "attempts": 3,
+  "repairLog": [
+    {
+      "attempt": 1,
+      "stage": "initial",
+      "model": "gemini-3.6-flash",
+      "finishReason": "STOP",
+      "action": "validated on the first pass",
+      "latencyMs": 10642
+    },
+    {
+      "attempt": 1,
+      "stage": "initial",
+      "model": "gemini-3.6-flash",
+      "finishReason": "STOP",
+      "action": "validated on the first pass",
+      "latencyMs": 9540
+    },
+    {
+      "attempt": 1,
+      "stage": "initial",
+      "model": "gemini-3.6-flash",
+      "finishReason": "STOP",
+      "action": "validated on the first pass",
+      "latencyMs": 19501
+    }
+  ],
+  "latencyMs": 39683,
+  "usage": {
+    "inputTokens": 3567,
+    "outputTokens": 790
+  },
+  "invoice": {
+    "vendorName": "ACME SUPPLIES INC.",
+    "invoiceNumber": "INV-2025-0417",
+    "invoiceDate": "2025-03-12",
+    "currency": "USD",
+    "lineItems": [
+      {
+        "description": "A4 Copier Paper, 80gsm (ream)",
+        "quantity": 40,
+        "unitPrice": 4.25,
+        "lineTotal": 170
+      },
+      {
+        "description": "Ballpoint Pens, blue (box of 50)",
+        "quantity": 12,
+        "unitPrice": 8.9,
+        "lineTotal": 106.8
+      },
+      {
+        "description": "Manila Folders, foolscap (pack of 100)",
+        "quantity": 6,
+        "unitPrice": 14.5,
+        "lineTotal": 87
+      },
+      {
+        "description": "Desk Organiser, mesh black",
+        "quantity": 3,
+        "unitPrice": 22,
+        "lineTotal": 66
+      }
+    ],
+    "subtotal": 429.8,
+    "discountTotal": null,
+    "taxTotal": 35.46,
+    "grandTotal": 465.26
+  },
+  "meta": {
+    "illegibleFields": [],
+    "legibility": 1,
+    "invoiceDateAsPrinted": "March 12, 2025",
+    "notes": ""
+  },
+  "flags": [],
+  "confidence": 1,
+  "status": "extracted",
+  "raw": {
+    "notes": "",
+    "legibility": 1,
+    "illegibleFields": [],
+    "invoiceDateAsPrinted": "March 12, 2025",
+    "agreement": {
+      "vendorName": "unanimous",
+      "invoiceNumber": "unanimous",
+      "invoiceDate": "unanimous",
+      "currency": "unanimous",
+      "subtotal": "unanimous",
+      "discountTotal": "unanimous",
+      "taxTotal": "unanimous",
+      "grandTotal": "unanimous",
+      "lineItems": "unanimous",
+      "lineItems[0].quantity": "unanimous",
+      "lineItems[0].unitPrice": "unanimous",
+      "lineItems[0].lineTotal": "unanimous",
+      "lineItems[1].quantity": "unanimous",
+      "lineItems[1].unitPrice": "unanimous",
+      "lineItems[1].lineTotal": "unanimous",
+      "lineItems[2].quantity": "unanimous",
+      "lineItems[2].unitPrice": "unanimous",
+      "lineItems[2].lineTotal": "unanimous",
+      "lineItems[3].quantity": "unanimous",
+      "lineItems[3].unitPrice": "unanimous",
+      "lineItems[3].lineTotal": "unanimous"
+    },
+    "sampleInvoices": [
+      {
+        "vendorName": "ACME SUPPLIES INC.",
+        "invoiceNumber": "INV-2025-0417",
+        "invoiceDate": "2025-03-12",
+        "currency": "USD",
+        "lineItems": [
+          {
+            "description": "A4 Copier Paper, 80gsm (ream)",
+            "quantity": 40,
+            "unitPrice": 4.25,
+            "lineTotal": 170
+          },
+          {
+            "description": "Ballpoint Pens, blue (box of 50)",
+            "quantity": 12,
+            "unitPrice": 8.9,
+            "lineTotal": 106.8
+          },
+          {
+            "description": "Manila Folders, foolscap (pack of 100)",
+            "quantity": 6,
+            "unitPrice": 14.5,
+            "lineTotal": 87
+          },
+          {
+            "description": "Desk Organiser, mesh black",
+            "quantity": 3,
+            "unitPrice": 22,
+            "lineTotal": 66
+          }
+        ],
+        "subtotal": 429.8,
+        "discountTotal": null,
+        "taxTotal": 35.46,
+        "grandTotal": 465.26
+      },
+      {
+        "vendorName": "ACME SUPPLIES INC.",
+        "invoiceNumber": "INV-2025-0417",
+        "invoiceDate": "2025-03-12",
+        "currency": "USD",
+        "lineItems": [
+          {
+            "description": "A4 Copier Paper, 80gsm (ream)",
+            "quantity": 40,
+            "unitPrice": 4.25,
+            "lineTotal": 170
+          },
+          {
+            "description": "Ballpoint Pens, blue (box of 50)",
+            "quantity": 12,
+            "unitPrice": 8.9,
+            "lineTotal": 106.8
+          },
+          {
+            "description": "Manila Folders, foolscap (pack of 100)",
+            "quantity": 6,
+            "unitPrice": 14.5,
+            "lineTotal": 87
+          },
+          {
+            "description": "Desk Organiser, mesh black",
+            "quantity": 3,
+            "unitPrice": 22,
+            "lineTotal": 66
+          }
+        ],
+        "subtotal": 429.8,
+        "discountTotal": null,
+        "taxTotal": 35.46,
+        "grandTotal": 465.26
+      },
+      {
+        "vendorName": "ACME SUPPLIES INC.",
+        "invoiceNumber": "INV-2025-0417",
+        "invoiceDate": "2025-03-12",
+        "currency": "USD",
+        "lineItems": [
+          {
+            "description": "A4 Copier Paper, 80gsm (ream)",
+            "quantity": 40,
+            "unitPrice": 4.25,
+            "lineTotal": 170
+          },
+          {
+            "description": "Ballpoint Pens, blue (box of 50)",
+            "quantity": 12,
+            "unitPrice": 8.9,
+            "lineTotal": 106.8
+          },
+          {
+            "description": "Manila Folders, foolscap (pack of 100)",
+            "quantity": 6,
+            "unitPrice": 14.5,
+            "lineTotal": 87
+          },
+          {
+            "description": "Desk Organiser, mesh black",
+            "quantity": 3,
+            "unitPrice": 22,
+            "lineTotal": 66
+          }
+        ],
+        "subtotal": 429.8,
+        "discountTotal": null,
+        "taxTotal": 35.46,
+        "grandTotal": 465.26
+      }
+    ]
+  }
+}

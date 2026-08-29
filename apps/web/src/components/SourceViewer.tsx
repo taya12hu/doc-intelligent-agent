@@ -46,10 +46,17 @@ export const SourceViewer = ({ document }: { document: DocumentDTO }) => {
 
   return (
     <iframe
-      // #view=FitH so the page arrives at a readable width rather than zoomed
-      // to a corner — on the scanned sample that difference decides whether
-      // the reviewer can read the stained total at all.
-      src={`${url}#view=FitH`}
+      /*
+       * view=FitH fits the page to the pane width; navpanes=0 drops the
+       * thumbnail sidebar, which is pure waste for a one-page invoice and
+       * costs about a fifth of the pane.
+       *
+       * This is not cosmetic. Left to itself Chrome opened the scan at 42%
+       * with a sidebar, and at that size the whole point of the pane —
+       * letting the reviewer decide for themselves what the digits under the
+       * coffee stain say — does not work.
+       */
+      src={`${url}#view=FitH&navpanes=0&toolbar=1`}
       title={document.filename}
       className="h-full w-full border-0 bg-stone-200"
     />
