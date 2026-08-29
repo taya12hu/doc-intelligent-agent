@@ -1,4 +1,4 @@
-import type { FieldFlag } from '@dia/shared';
+import { coerceMoney, type FieldFlag } from '@dia/shared';
 import { useEffect, useState } from 'react';
 import { FlagList, flagRing } from './FlagChip.js';
 
@@ -77,9 +77,13 @@ export const NumberField = ({
       if (value !== null) onCommit(null);
       return;
     }
-    // Accept what a person actually types: "1,234.50", "$1,200".
-    const parsed = Number(trimmed.replace(/[^0-9.\-]/g, ''));
-    if (!Number.isFinite(parsed)) {
+    // The SAME parser the extraction pipeline uses, imported from @dia/shared
+    // rather than re-implemented here. A reviewer copying "1,41,077.85" or
+    // "€1.234,56" straight off the document should get the same number the
+    // model would have — a second, naive parser in the UI is exactly the kind
+    // of quiet divergence that produces a wrong total nobody can explain.
+    const parsed = coerceMoney(trimmed);
+    if (parsed === null) {
       setDraft(value === null ? '' : String(value)); // reject, don't guess
       return;
     }

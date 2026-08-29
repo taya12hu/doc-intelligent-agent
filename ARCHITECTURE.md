@@ -5,6 +5,22 @@
 
 **Stack locked:** Gemini (LLM, primary) · Drizzle (ORM) · Supabase Postgres + Storage · Express + TS · React + Vite + TS + Tailwind.
 
+> ### This is the DESIGN doc, written before the build. `README.md` is the as-built.
+>
+> It is kept unedited apart from this box, because what changed on contact with
+> reality is itself worth reading. The deltas that matter:
+>
+> | Planned here | What shipped | Why |
+> |---|---|---|
+> | §5.7 escalation triggered *post-hoc* by low confidence, low legibility or ≥2 error flags | Escalation is rung 3 of the repair ladder: it fires when the model cannot produce a **valid** record, not when it produces a low-confidence one. | Post-hoc escalation is a different feature — "try harder on a hard document" — and costs a whole extra extraction run. Against a 20-request **daily** free-tier cap that is not affordable, and it would not have helped: on the degraded scan the model was not failing to produce output, it was correctly declining to guess. Escalating would have pressured a second model into guessing instead. |
+> | 3 self-consistency passes | Default 2, 3 supported | Same daily quota. §5.6's reasoning is unchanged; only the default moved. |
+> | `gemini-3.7-flash` / `gemini-2.5-pro` | `gemini-3.6-flash` / `gemini-3.5-flash` | 3.7 is routinely 503; 2.5-pro returns 404 "no longer available to new users". Pro-class models are quota-blocked without billing, so escalation goes to a different flash generation — still a different model with different failure modes. |
+> | Passes run concurrently | Sequential | 5 req/min means concurrent passes all fail together. Sequential also degrades better: pass 0 is canonical, so exhausting quota partway still leaves a usable record. |
+> | `meta.illegibleFields` only | Also `meta.invoiceDateAsPrinted` | Added mid-build: once the model normalises `08/03/2025` to ISO, the ambiguity is undetectable. Keeping the printed form is what makes the `ambiguous_date` flag possible at all. |
+>
+> Everything else — the two-stage reconciliation, the repair ladder, consensus,
+> computed confidence, the two-pane review screen — shipped as described.
+
 ---
 
 ## 1. What we're actually being graded on

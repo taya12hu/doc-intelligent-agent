@@ -1,4 +1,4 @@
-import { coerceMoney } from '../lib/money.js';
+import { coerceMoney } from '@dia/shared';
 
 /**
  * Normalise a parsed model response before zod sees it.

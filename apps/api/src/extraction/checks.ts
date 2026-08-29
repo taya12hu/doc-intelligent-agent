@@ -4,9 +4,11 @@ import {
   type ExtractionMeta,
   type FieldFlag,
   type Invoice,
+  MONEY_EPSILON,
+  moneyEquals,
+  round2,
 } from '@dia/shared';
 import { isImplausibleDate, normaliseDate } from '../lib/date.js';
-import { MONEY_EPSILON, moneyEquals, round2 } from '../lib/money.js';
 
 /**
  * Deterministic checks. Nothing here calls a model.

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { runExtraction, type RunResult } from '../extraction/index.js';
 import { createGeminiProvider } from '../llm/gemini.js';
 import { REPO_ROOT } from '../lib/paths.js';
-import { moneyEquals } from '../lib/money.js';
+import { moneyEquals } from '@dia/shared';
 
 /**
  * `npm run eval`

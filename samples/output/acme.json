@@ -8,8 +8,8 @@
   "provider": "gemini",
   "model": "gemini-3.6-flash",
   "escalatedTo": null,
-  "samples": 3,
-  "attempts": 3,
+  "samples": 2,
+  "attempts": 2,
   "repairLog": [
     {
       "attempt": 1,
@@ -17,7 +17,7 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 10642
+      "latencyMs": 15917
     },
     {
       "attempt": 1,
@@ -25,21 +25,13 @@
       "model": "gemini-3.6-flash",
       "finishReason": "STOP",
       "action": "validated on the first pass",
-      "latencyMs": 9540
-    },
-    {
-      "attempt": 1,
-      "stage": "initial",
-      "model": "gemini-3.6-flash",
-      "finishReason": "STOP",
-      "action": "validated on the first pass",
-      "latencyMs": 19501
+      "latencyMs": 9349
     }
   ],
-  "latencyMs": 39683,
+  "latencyMs": 25266,
   "usage": {
-    "inputTokens": 3567,
-    "outputTokens": 790
+    "inputTokens": 2378,
+    "outputTokens": 510
   },
   "invoice": {
     "vendorName": "ACME SUPPLIES INC.",
@@ -115,42 +107,6 @@
       "lineItems[3].lineTotal": "unanimous"
     },
     "sampleInvoices": [
-      {
-        "vendorName": "ACME SUPPLIES INC.",
-        "invoiceNumber": "INV-2025-0417",
-        "invoiceDate": "2025-03-12",
-        "currency": "USD",
-        "lineItems": [
-          {
-            "description": "A4 Copier Paper, 80gsm (ream)",
-            "quantity": 40,
-            "unitPrice": 4.25,
-            "lineTotal": 170
-          },
-          {
-            "description": "Ballpoint Pens, blue (box of 50)",
-            "quantity": 12,
-            "unitPrice": 8.9,
-            "lineTotal": 106.8
-          },
-          {
-            "description": "Manila Folders, foolscap (pack of 100)",
-            "quantity": 6,
-            "unitPrice": 14.5,
-            "lineTotal": 87
-          },
-          {
-            "description": "Desk Organiser, mesh black",
-            "quantity": 3,
-            "unitPrice": 22,
-            "lineTotal": 66
-          }
-        ],
-        "subtotal": 429.8,
-        "discountTotal": null,
-        "taxTotal": 35.46,
-        "grandTotal": 465.26
-      },
       {
         "vendorName": "ACME SUPPLIES INC.",
         "invoiceNumber": "INV-2025-0417",
