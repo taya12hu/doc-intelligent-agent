@@ -1,4 +1,5 @@
 import { coerceMoney } from '@dia/shared';
+import { normaliseFieldPath } from './checks.js';
 
 /**
  * Normalise a parsed model response before zod sees it.
@@ -87,8 +88,16 @@ export const coerceEnvelope = (value: unknown): unknown => {
     const meta: Record<string, unknown> = { ...out.meta };
     const legibility = coerceMoney(meta.legibility);
     meta.legibility = legibility === null ? 1 : Math.min(1, Math.max(0, legibility));
+    // Normalise here, at the single point where model output is parsed, so
+    // everything downstream — flags, the persisted `raw`, and the
+    // edited-field comparison in recheck.ts — sees the same path spelling.
+    // Doing it only at flag-creation time left recheck comparing the model's
+    // "invoice.lineItems[2].unitPrice" against our "lineItems[2].unitPrice",
+    // so an illegibility flag would never clear after a human fixed the field.
     meta.illegibleFields = Array.isArray(meta.illegibleFields)
-      ? meta.illegibleFields.filter((f): f is string => typeof f === 'string')
+      ? meta.illegibleFields
+          .filter((f): f is string => typeof f === 'string')
+          .map(normaliseFieldPath)
       : [];
     meta.notes = typeof meta.notes === 'string' ? meta.notes : '';
     meta.invoiceDateAsPrinted = cleanText(meta.invoiceDateAsPrinted);

@@ -216,10 +216,42 @@ export const checkMissingRequired = (invoice: Invoice, derived: DerivedTotal[]):
   return flags;
 };
 
+/**
+ * Normalise a field path the MODEL produced into one our own code uses.
+ *
+ * `meta.illegibleFields` is free-form text from the model, and it does not
+ * reliably match the paths every other flag uses. In practice it comes back
+ * as `invoice.grandTotal` — correct from the model's point of view, since the
+ * envelope it fills in really does nest the record under `invoice`.
+ *
+ * That one dotted prefix made the flag INVISIBLE. The UI decorates a field by
+ * matching `flag.field === 'grandTotal'`, so an `illegible_source` error
+ * landing on `invoice.grandTotal` rendered nowhere at all: not on the input,
+ * not in the record-level banner. The single most important flag on the
+ * scanned sample — "the model could not read this, do not trust it" — was
+ * being computed correctly and then silently dropped on the floor.
+ *
+ * Only found it by reading a real eval output. Worth remembering that any
+ * model-authored identifier needs normalising before it is used as a key.
+ */
+export const normaliseFieldPath = (raw: string): string =>
+  raw
+    .trim()
+    .replace(/^invoice\./, '')
+    .replace(/^\$\./, '')
+    // "lineItems.2.unitPrice" -> "lineItems[2].unitPrice"
+    .replace(/lineItems\.(\d+)\./, 'lineItems[$1].')
+    // "lineItems[2].unit_price" -> camelCase, in case the model snake-cases
+    .replace(/_([a-z])/g, (_, ch: string) => ch.toUpperCase());
+
 /** Fields the model itself said it could not read. */
 export const checkIllegible = (meta: ExtractionMeta): FieldFlag[] =>
   meta.illegibleFields.map((field) =>
-    flag(field, 'illegible_source', 'the model reported this region as unreadable'),
+    flag(
+      normaliseFieldPath(field),
+      'illegible_source',
+      'the model reported this region as unreadable',
+    ),
   );
 
 export const checkDate = (invoice: Invoice, meta: ExtractionMeta): FieldFlag[] => {

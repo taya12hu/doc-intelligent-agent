@@ -1,0 +1,243 @@
+{
+  "classification": {
+    "kind": "xlsx",
+    "charsPerPage": 0,
+    "pageCount": 1,
+    "textLayer": ""
+  },
+  "provider": "gemini",
+  "model": "gemini-3.6-flash",
+  "escalatedTo": null,
+  "samples": 2,
+  "attempts": 2,
+  "repairLog": [
+    {
+      "attempt": 1,
+      "stage": "initial",
+      "model": "gemini-3.6-flash",
+      "finishReason": "STOP",
+      "action": "validated on the first pass",
+      "latencyMs": 23249
+    },
+    {
+      "attempt": 1,
+      "stage": "initial",
+      "model": "gemini-3.6-flash",
+      "finishReason": "STOP",
+      "action": "validated on the first pass",
+      "latencyMs": 15586
+    }
+  ],
+  "latencyMs": 38835,
+  "usage": {
+    "inputTokens": 3032,
+    "outputTokens": 694
+  },
+  "invoice": {
+    "vendorName": "ZENITH PARTS & COMPONENTS",
+    "invoiceNumber": "ZP-88213",
+    "invoiceDate": "2025-02-27",
+    "currency": "EUR",
+    "lineItems": [
+      {
+        "description": "Flange Adapter FA-12",
+        "quantity": 120,
+        "unitPrice": 18.4,
+        "lineTotal": 2208
+      },
+      {
+        "description": "Shaft Collar SC-25",
+        "quantity": 300,
+        "unitPrice": 3.75,
+        "lineTotal": 1125
+      },
+      {
+        "description": "Retaining Ring RR-40",
+        "quantity": 500,
+        "unitPrice": 0.92,
+        "lineTotal": 460
+      },
+      {
+        "description": "Hex Bolt M10x50 (box 100)",
+        "quantity": 25,
+        "unitPrice": 22.6,
+        "lineTotal": 565
+      },
+      {
+        "description": "Lock Washer M10 (box 500)",
+        "quantity": 8,
+        "unitPrice": 31.25,
+        "lineTotal": null
+      },
+      {
+        "description": "Threaded Rod M12x1000",
+        "quantity": 40,
+        "unitPrice": 9.15,
+        "lineTotal": 366
+      }
+    ],
+    "subtotal": 4974,
+    "discountTotal": null,
+    "taxTotal": 1044.54,
+    "grandTotal": 6018.54
+  },
+  "meta": {
+    "illegibleFields": [
+      "lineItems[4].lineTotal"
+    ],
+    "legibility": 1,
+    "invoiceDateAsPrinted": "27/02/2025",
+    "notes": "Invoice contains two line item sections (Machined Components and Fasteners). Amount cell for Lock Washer M10 is empty on the document."
+  },
+  "flags": [
+    {
+      "field": "lineItems[4].lineTotal",
+      "reason": "missing",
+      "severity": "warn",
+      "detail": "blank on the document — 8 x 31.25 would be 250.00, but confirm it before accepting"
+    },
+    {
+      "field": "lineItems[4].lineTotal",
+      "reason": "illegible_source",
+      "severity": "error",
+      "detail": "the model reported this region as unreadable"
+    }
+  ],
+  "confidence": 0.8,
+  "status": "needs_review",
+  "raw": {
+    "notes": "Invoice contains two line item sections (Machined Components and Fasteners). Amount cell for Lock Washer M10 is empty on the document.",
+    "legibility": 1,
+    "illegibleFields": [
+      "lineItems[4].lineTotal"
+    ],
+    "invoiceDateAsPrinted": "27/02/2025",
+    "agreement": {
+      "vendorName": "unanimous",
+      "invoiceNumber": "unanimous",
+      "invoiceDate": "unanimous",
+      "currency": "unanimous",
+      "subtotal": "unanimous",
+      "discountTotal": "unanimous",
+      "taxTotal": "unanimous",
+      "grandTotal": "unanimous",
+      "lineItems": "unanimous",
+      "lineItems[0].quantity": "unanimous",
+      "lineItems[0].unitPrice": "unanimous",
+      "lineItems[0].lineTotal": "unanimous",
+      "lineItems[1].quantity": "unanimous",
+      "lineItems[1].unitPrice": "unanimous",
+      "lineItems[1].lineTotal": "unanimous",
+      "lineItems[2].quantity": "unanimous",
+      "lineItems[2].unitPrice": "unanimous",
+      "lineItems[2].lineTotal": "unanimous",
+      "lineItems[3].quantity": "unanimous",
+      "lineItems[3].unitPrice": "unanimous",
+      "lineItems[3].lineTotal": "unanimous",
+      "lineItems[4].quantity": "unanimous",
+      "lineItems[4].unitPrice": "unanimous",
+      "lineItems[4].lineTotal": "unanimous",
+      "lineItems[5].quantity": "unanimous",
+      "lineItems[5].unitPrice": "unanimous",
+      "lineItems[5].lineTotal": "unanimous"
+    },
+    "sampleInvoices": [
+      {
+        "vendorName": "ZENITH PARTS & COMPONENTS",
+        "invoiceNumber": "ZP-88213",
+        "invoiceDate": "2025-02-27",
+        "currency": "EUR",
+        "lineItems": [
+          {
+            "description": "Flange Adapter FA-12",
+            "quantity": 120,
+            "unitPrice": 18.4,
+            "lineTotal": 2208
+          },
+          {
+            "description": "Shaft Collar SC-25",
+            "quantity": 300,
+            "unitPrice": 3.75,
+            "lineTotal": 1125
+          },
+          {
+            "description": "Retaining Ring RR-40",
+            "quantity": 500,
+            "unitPrice": 0.92,
+            "lineTotal": 460
+          },
+          {
+            "description": "Hex Bolt M10x50 (box 100)",
+            "quantity": 25,
+            "unitPrice": 22.6,
+            "lineTotal": 565
+          },
+          {
+            "description": "Lock Washer M10 (box 500)",
+            "quantity": 8,
+            "unitPrice": 31.25,
+            "lineTotal": null
+          },
+          {
+            "description": "Threaded Rod M12x1000",
+            "quantity": 40,
+            "unitPrice": 9.15,
+            "lineTotal": 366
+          }
+        ],
+        "subtotal": 4974,
+        "discountTotal": null,
+        "taxTotal": 1044.54,
+        "grandTotal": 6018.54
+      },
+      {
+        "vendorName": "ZENITH PARTS & COMPONENTS",
+        "invoiceNumber": "ZP-88213",
+        "invoiceDate": "2025-02-27",
+        "currency": "EUR",
+        "lineItems": [
+          {
+            "description": "Flange Adapter FA-12",
+            "quantity": 120,
+            "unitPrice": 18.4,
+            "lineTotal": 2208
+          },
+          {
+            "description": "Shaft Collar SC-25",
+            "quantity": 300,
+            "unitPrice": 3.75,
+            "lineTotal": 1125
+          },
+          {
+            "description": "Retaining Ring RR-40",
+            "quantity": 500,
+            "unitPrice": 0.92,
+            "lineTotal": 460
+          },
+          {
+            "description": "Hex Bolt M10x50 (box 100)",
+            "quantity": 25,
+            "unitPrice": 22.6,
+            "lineTotal": 565
+          },
+          {
+            "description": "Lock Washer M10 (box 500)",
+            "quantity": 8,
+            "unitPrice": 31.25,
+            "lineTotal": null
+          },
+          {
+            "description": "Threaded Rod M12x1000",
+            "quantity": 40,
+            "unitPrice": 9.15,
+            "lineTotal": 366
+          }
+        ],
+        "subtotal": 4974,
+        "discountTotal": null,
+        "taxTotal": 1044.54,
+        "grandTotal": 6018.54
+      }
+    ]
+  }
+}

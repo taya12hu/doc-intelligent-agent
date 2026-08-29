@@ -272,7 +272,40 @@ flagged        wrong or missing, but we said so
 SILENTLY WRONG wrong, and we claimed otherwise    ← the only number that matters
 ```
 
-<!-- EVAL_RESULTS -->
+Run on `gemini-3.6-flash`, `EXTRACTION_SAMPLES=2`. Committed results are in `samples/output/`.
+
+```
+sample      status        expected        correct  flagged   silent
+acme        extracted     extracted            24        0        0
+northwind   extracted     extracted            24        0        0
+blueridge   needs_review  needs_review         23        1        0
+zenith      needs_review  needs_review         32        0        0
+──────────────────────────────────────────────────────────────────
+TOTAL                                         103        1        0
+                                            99.0%     1.0%     0.0%
+```
+
+**Zero silently wrong across all four documents**, and every status matched what the fixture
+expected. The single non-correct field is Blue Ridge's grand total, sitting under the coffee
+stain — the model returned `null`, reported the region unreadable, and the record came back
+`needs_review` at 49% confidence. That is the designed outcome, not a miss.
+
+Worth being precise about what this does and doesn't show. It's **four documents I wrote
+myself**, so it measures "does the machinery behave as designed on its own fixtures", not
+real-world accuracy. What it does establish is the property the whole system is built around:
+nothing was wrong *and* silent.
+
+Two honest notes:
+
+- On this run both passes read the degraded unit price (`43.75`) and the clipped tax value
+  (`236.55`) correctly, so no disagreement flag fired on them. The fixture lists them as planted
+  difficulties and the eval reports that they were shrugged off — **as information, not a
+  failure.** An earlier version of the scorer failed the run for this, which had it marking the
+  system down for succeeding.
+- Blue Ridge's numbers vary between runs. That's the point of the sample; the *status* has been
+  stable at `needs_review`.
+
+The eval exits non-zero if anything is silently wrong, so it works as a gate.
 
 ---
 

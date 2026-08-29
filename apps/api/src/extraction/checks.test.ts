@@ -180,6 +180,31 @@ describe('legibility and repair signals', () => {
     expect(flags.filter((f) => f.reason === 'illegible_source')).toHaveLength(2);
   });
 
+  it('normalises model-authored field paths so the flag is not orphaned', () => {
+    // Gemini actually returns "invoice.grandTotal" — correct from its point of
+    // view, since the envelope really does nest the record under `invoice`.
+    // Left alone, the UI matches on `flag.field === 'grandTotal'` and the flag
+    // renders NOWHERE: not on the input, not in the record banner. The most
+    // important flag on the scanned sample was being computed and then
+    // silently dropped. Caught by reading a real eval output, not a unit test.
+    const flags = runChecks(
+      ctx(invoiceOf(ACME), {
+        illegibleFields: ['invoice.grandTotal', 'invoice.lineItems.2.unitPrice', '$.subtotal'],
+      }),
+    );
+    const paths = flags.filter((f) => f.reason === 'illegible_source').map((f) => f.field);
+    expect(paths).toEqual(['grandTotal', 'lineItems[2].unitPrice', 'subtotal']);
+  });
+
+  it('normalises snake_case paths too', () => {
+    const flags = runChecks(
+      ctx(invoiceOf(ACME), { illegibleFields: ['invoice.lineItems[1].unit_price'] }),
+    );
+    expect(flags.find((f) => f.reason === 'illegible_source')?.field).toBe(
+      'lineItems[1].unitPrice',
+    );
+  });
+
   it('flags an ambiguous printed date and explains both readings', () => {
     const invoice = { ...invoiceOf(ACME), invoiceDate: '2025-08-03' };
     const flags = runChecks(ctx(invoice, { invoiceDateAsPrinted: '08/03/2025' }));

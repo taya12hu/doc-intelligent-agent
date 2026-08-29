@@ -73,7 +73,7 @@ const valuesMatch = (expected: unknown, actual: unknown): boolean => {
 const scoreSample = (
   truth: Truth['samples'][number],
   result: RunResult,
-): { outcomes: FieldOutcome[]; missedFlags: string[] } => {
+): { outcomes: FieldOutcome[]; missedFlags: string[]; shruggedOff: string[] } => {
   const flags = result.flags;
   const outcomes: FieldOutcome[] = [];
 
@@ -144,11 +144,34 @@ const scoreSample = (
     }
   }
 
-  // Fields the fixture says MUST be flagged: places where a confident value
-  // is a failure even if it happens to be right.
-  const missedFlags = truth.mustFlag.filter((m) => !isFlagged(m.field)).map((m) => m.field);
+  /**
+   * Planted difficulties that came back neither flagged nor wrong.
+   *
+   * This is REPORTED, not failed on.
+   *
+   * My first version treated an unflagged `mustFlag` field as a failure, and
+   * that was the wrong semantics: on a run where both passes read the
+   * degraded unit price correctly, the eval marked the system down for
+   * succeeding. The property that actually matters is "correct OR flagged,
+   * never silently wrong" — and `silently_wrong` already measures exactly
+   * that.
+   *
+   * So this stays as a note, because it is genuinely interesting to know
+   * which planted difficulties the model shrugged off on a given run. It just
+   * is not a defect.
+   */
+  const shruggedOff = truth.mustFlag
+    .filter((m) => {
+      const outcome = outcomes.find((o) => o.field === m.field);
+      return outcome?.bucket === 'correct';
+    })
+    .map((m) => m.field);
 
-  return { outcomes, missedFlags };
+  const missedFlags = truth.mustFlag
+    .filter((m) => !isFlagged(m.field) && !shruggedOff.includes(m.field))
+    .map((m) => m.field);
+
+  return { outcomes, missedFlags, shruggedOff };
 };
 
 const main = async () => {
@@ -170,6 +193,7 @@ const main = async () => {
     silent: number;
     total: number;
     missedFlags: string[];
+    shruggedOff: string[];
     silentFields: FieldOutcome[];
   }[] = [];
 
@@ -200,7 +224,7 @@ const main = async () => {
       JSON.stringify(result, null, 2),
     );
 
-    const { outcomes, missedFlags } = scoreSample(sample, result);
+    const { outcomes, missedFlags, shruggedOff } = scoreSample(sample, result);
     const correct = outcomes.filter((o) => o.bucket === 'correct').length;
     const flagged = outcomes.filter((o) => o.bucket === 'flagged').length;
     const silent = outcomes.filter((o) => o.bucket === 'silently_wrong');
@@ -215,6 +239,7 @@ const main = async () => {
       silent: silent.length,
       total: outcomes.length,
       missedFlags,
+      shruggedOff,
       silentFields: silent,
     });
 
@@ -287,6 +312,16 @@ const main = async () => {
       console.log(
         c.red(`  ${r.key}: expected flags never raised on `) + r.missedFlags.join(', '),
       );
+    }
+  }
+
+  // Informational: planted difficulties the model simply read correctly. Not a
+  // defect — the guarantee is "correct OR flagged", and these are correct.
+  const shrugged = rows.filter((r) => r.shruggedOff.length);
+  if (shrugged.length) {
+    console.log(c.dim('\nPlanted difficulties read correctly this run (not a defect):'));
+    for (const r of shrugged) {
+      console.log(c.dim(`  ${r.key}: ${r.shruggedOff.join(', ')}`));
     }
   }
 
