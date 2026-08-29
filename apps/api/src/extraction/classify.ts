@@ -81,9 +81,8 @@ export const extractTextLayer = async (
   // task in pdfjs v6, and calling it on the document proxy throws.
   const task = getDocument({
     data: new Uint8Array(buf),
-    // No worker thread and no eval in a server process.
+    // No worker fetch in a server process.
     useWorkerFetch: false,
-    isEvalSupported: false,
     disableFontFace: true,
     standardFontDataUrl: STANDARD_FONT_DATA_URL,
   });
