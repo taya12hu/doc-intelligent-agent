@@ -97,23 +97,38 @@ export const runExtraction = async (input: RunInput): Promise<RunResult> => {
     schema: RESPONSE_SCHEMA,
   };
 
-  // Run the passes concurrently. The provider owns backoff, so a free-tier
-  // rate limit shows up as a slower call rather than a failed one. Set
-  // EXTRACTION_SAMPLES=1 if the limit bites hard enough to matter.
-  const outcomes: SampleOutcome[] = await Promise.all(
-    Array.from({ length: sampleCount }, (_, i) =>
-      extractWithRepair(input.provider, callInput, {
+  /**
+   * Passes run SEQUENTIALLY, not concurrently.
+   *
+   * I wrote this as `Promise.all` first, which was wrong. Gemini's free tier
+   * allows 5 requests per minute per model, and three simultaneous passes
+   * trip it immediately — all three fail together and the document produces
+   * nothing at all.
+   *
+   * Sequential is better than "concurrent with backoff" for a reason beyond
+   * politeness: pass 0 is the canonical temperature-0 reading. Running it
+   * first means that if the quota runs out partway, we still have a usable
+   * record from fewer passes (with the reduced consensus flagged) rather than
+   * losing everything at once. Degrading is worth more than parallelism when
+   * the whole run takes a handful of seconds anyway.
+   */
+  const outcomes: SampleOutcome[] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    outcomes.push(
+      await extractWithRepair(input.provider, callInput, {
         model: env.GEMINI_MODEL,
         escalationModel: env.GEMINI_ESCALATION_MODEL,
         temperature: temperatureFor(i),
         maxOutputTokens: MAX_OUTPUT_TOKENS,
       }),
-    ),
-  );
+    );
+  }
 
   const repairLog = outcomes.flatMap((o) => o.repairLog);
   const attempts = outcomes.reduce((a, o) => a + o.attempts, 0);
-  const latencyMs = Math.max(...outcomes.map((o) => o.latencyMs));
+  // Summed, not maxed: the passes run one after another, so total model time
+  // is the sum. (It was `Math.max` while they ran concurrently.)
+  const latencyMs = outcomes.reduce((a, o) => a + o.latencyMs, 0);
   const escalatedTo = outcomes.find((o) => o.escalatedTo)?.escalatedTo ?? null;
   const truncated = outcomes.some((o) => o.truncated);
   const repaired = outcomes.some((o) => o.attempts > 1);

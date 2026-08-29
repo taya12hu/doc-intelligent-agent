@@ -25,10 +25,41 @@ import {
 
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
-/** Transport-level retries. NOT counted as repair attempts. */
-const TRANSPORT = { maxAttempts: 4, baseDelayMs: 700, maxDelayMs: 8_000 } as const;
+/**
+ * Transport-level retries. NOT counted as repair attempts.
+ *
+ * `maxDelayMs` is 65s because the free tier's quota window is a minute: when
+ * Gemini says "retry in 46s" the only useful thing to do is wait 46 seconds.
+ * An 8s ceiling — my first guess — guarantees every retry lands inside the
+ * same exhausted window and burns the whole budget in under 20 seconds.
+ */
+const TRANSPORT = { maxAttempts: 4, baseDelayMs: 700, maxDelayMs: 65_000 } as const;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Gemini tells us exactly how long to wait on a 429. Use it.
+ *
+ * It arrives two ways depending on the error surface — a `RetryInfo` detail
+ * with `retryDelay: "37s"`, and prose in the message ("Please retry in
+ * 37.9s"). Both are worth parsing: guessing at an exponential backoff when
+ * the server has published the answer is how you turn a 40-second wait into
+ * a failed extraction.
+ */
+const parseRetryDelayMs = (err: unknown): number | null => {
+  const text =
+    typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message: unknown }).message)
+      : String(err);
+
+  const structured = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(text);
+  if (structured) return Math.ceil(Number(structured[1]) * 1000);
+
+  const prose = /retry in (\d+(?:\.\d+)?)\s*s/i.exec(text);
+  if (prose) return Math.ceil(Number(prose[1]) * 1000);
+
+  return null;
+};
 
 const statusOf = (err: unknown): number | undefined => {
   if (typeof err !== 'object' || err === null) return undefined;
@@ -122,12 +153,22 @@ export const createGeminiProvider = (apiKey = env.GEMINI_API_KEY): LLMProvider =
             );
           }
 
-          // Exponential backoff with jitter. The free tier's per-minute limit
-          // is the expected reason to land here, and it clears on its own.
+          // Prefer the server's own retry hint over our guess. Add a second
+          // of slack so we do not land exactly on the boundary of a window
+          // that is still closing.
+          const hinted = parseRetryDelayMs(err);
+          const backoff = TRANSPORT.baseDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random());
           const delay = Math.min(
             TRANSPORT.maxDelayMs,
-            TRANSPORT.baseDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random()),
+            hinted !== null ? hinted + 1_000 : backoff,
           );
+
+          if (hinted !== null) {
+            console.warn(
+              `  rate limited; waiting ${Math.round(delay / 1000)}s as instructed ` +
+                `(attempt ${attempt}/${TRANSPORT.maxAttempts})`,
+            );
+          }
           await sleep(delay);
         }
       }
