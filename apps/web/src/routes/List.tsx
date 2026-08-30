@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDocuments } from '../api/hooks.js';
 import { ConfidenceBar } from '../components/ConfidenceBar.js';
+import { FlagTooltip } from '../components/FlagTooltip.js';
 import { StatusPill, pillState } from '../components/StatusPill.js';
 
 const KIND_LABEL: Record<string, string> = {
@@ -132,7 +133,7 @@ export const List = () => {
             : 'No records have been marked reviewed yet.'}
         </p>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
+        <div className="rounded-lg border border-stone-200 bg-white">
           <table className="w-full text-sm">
             <thead className="bg-stone-50 text-xs text-stone-500">
               <tr>
@@ -171,19 +172,7 @@ export const List = () => {
                     <ConfidenceBar value={row.confidence} />
                   </td>
                   <td className="px-3 py-2.5 text-right">
-                    {row.flagCount === 0 ? (
-                      <span className="text-xs text-stone-400">none</span>
-                    ) : (
-                      <span
-                        className={`tnum rounded px-1.5 py-0.5 text-xs ${
-                          row.errorFlagCount > 0
-                            ? 'bg-red-50 text-red-800'
-                            : 'bg-amber-50 text-amber-900'
-                        }`}
-                      >
-                        {row.flagCount}
-                      </span>
-                    )}
+                    <FlagTooltip flags={row.flags} errorCount={row.errorFlagCount} />
                   </td>
                   {/* Several documents can share a filename. The timestamp is
                       what tells one upload from another. */}

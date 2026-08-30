@@ -4,6 +4,7 @@ import { ApiRequestError } from '../api/client.js';
 import { useExtractionState } from '../api/extractionState.js';
 import { useRunSample, useSamples, useUpload } from '../api/hooks.js';
 import { ExtractionProgress } from '../components/ExtractionProgress.js';
+import { Logo } from '../components/Logo.js';
 
 const ACCEPTED = '.pdf,.xlsx,.xls';
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -64,12 +65,41 @@ export const Upload = () => {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-12">
-      <h1 className="text-2xl font-semibold tracking-tight text-stone-900">Extract an invoice</h1>
-      <p className="mt-2 text-sm leading-relaxed text-stone-600">
-        Upload a PDF or Excel invoice. The fields are extracted with a language model, checked
-        against the document's own arithmetic, and anything that can't be confirmed is flagged
-        for you to review.
-      </p>
+      <header className="text-center">
+        <Logo className="mx-auto h-11 w-11" />
+        <h1 className="mt-4 text-3xl font-semibold tracking-tight text-stone-900">
+          Extract an invoice
+        </h1>
+        <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-stone-600">
+          Upload a PDF or Excel invoice. The fields are read by a language model, checked
+          against the document's own arithmetic, and anything that can't be confirmed is
+          flagged for you to review.
+        </p>
+
+        {/* The three checks, stated up front. They are what distinguishes this
+            from pasting a document into a chat window and trusting the reply. */}
+        <ul className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-stone-500">
+          {[
+            'Text and scanned PDFs',
+            'Totals reconciled independently',
+            'Uncertain values flagged, not guessed',
+          ].map((item) => (
+            <li key={item} className="flex items-center gap-1.5">
+              <svg
+                aria-hidden
+                viewBox="0 0 16 16"
+                className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="m3.5 8.5 3 3 6-6.5" />
+              </svg>
+              {item}
+            </li>
+          ))}
+        </ul>
+      </header>
 
       {/* While a job runs, the drop zone is replaced entirely rather than
           dimmed. A greyed-out target still invites a drop; removing it makes

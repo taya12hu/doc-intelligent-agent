@@ -8,7 +8,7 @@ import type {
   LineItemDTO,
   RepairStep,
 } from '@dia/shared';
-import { and, asc, desc, eq, sql as raw } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql as raw } from 'drizzle-orm';
 import type { RunResult } from '../extraction/index.js';
 import { db } from './client.js';
 import {
@@ -126,6 +126,7 @@ export const listDocuments = async (): Promise<DocumentListItem[]> => {
       confidence: extractions.confidence,
       flags: extractions.flags,
       reviewedAt: extractions.reviewedAt,
+      extractionId: extractions.id,
     })
     .from(documents)
     .leftJoin(
@@ -142,8 +143,34 @@ export const listDocuments = async (): Promise<DocumentListItem[]> => {
       desc(documents.createdAt),
     );
 
+  /**
+   * Line-item flags, fetched separately and merged in.
+   *
+   * The count previously came from `extractions.flags` alone, which omits
+   * per-row flags — so a document whose only problem was a bad line item
+   * showed "none" in the list and two flags on the record screen. One query
+   * for the whole page is fine at this scale and keeps the two views
+   * consistent.
+   */
+  const extractionIds = rows.map((r) => r.extractionId).filter((id): id is string => id !== null);
+  const rowFlags = extractionIds.length
+    ? await db
+        .select({ extractionId: lineItems.extractionId, flags: lineItems.flags })
+        .from(lineItems)
+        .where(inArray(lineItems.extractionId, extractionIds))
+    : [];
+
+  const byExtraction = new Map<string, FieldFlag[]>();
+  for (const r of rowFlags) {
+    const existing = byExtraction.get(r.extractionId) ?? [];
+    byExtraction.set(r.extractionId, [...existing, ...((r.flags ?? []) as FieldFlag[])]);
+  }
+
   return rows.map((r) => {
-    const flags = (r.flags ?? []) as FieldFlag[];
+    const flags = [
+      ...((r.flags ?? []) as FieldFlag[]),
+      ...(r.extractionId ? (byExtraction.get(r.extractionId) ?? []) : []),
+    ];
     return {
       id: r.id,
       filename: r.filename,
@@ -155,6 +182,7 @@ export const listDocuments = async (): Promise<DocumentListItem[]> => {
       confidence: r.confidence,
       flagCount: flags.length,
       errorFlagCount: flags.filter((f) => f.severity === 'error').length,
+      flags,
       reviewedAt: iso(r.reviewedAt),
       createdAt: r.createdAt.toISOString(),
     };

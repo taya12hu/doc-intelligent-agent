@@ -17,6 +17,25 @@ body {
 }
 
 /*
+ * Tailwind v4 removed the preflight rule that gave buttons `cursor: pointer`,
+ * so every control in the app looked inert on hover. Restore it for anything
+ * interactive, and show `not-allowed` when a control is disabled so the
+ * difference between "busy" and "broken" is legible.
+ */
+button:not(:disabled),
+[role='button']:not(:disabled),
+label:has(input[type='file']:not(:disabled)),
+summary,
+a[href] {
+  cursor: pointer;
+}
+
+button:disabled,
+[role='button'][aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+/*
  * Numbers in the review UI are read column against column and compared to the
  * source document. Tabular figures keep digits on a fixed grid, so a
  * transposed or mis-scaled value is visible as a shape rather than something

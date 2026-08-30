@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FieldFlagSchema } from './flags.js';
+import { FieldFlagSchema, type FieldFlag } from './flags.js';
 import { LineItemSchema } from './invoice.js';
 import { DOCUMENT_STATUSES, EXTRACTION_STATUSES, FILE_KINDS } from './status.js';
 
@@ -98,6 +98,12 @@ export type DocumentListItem = {
   confidence: number | null;
   flagCount: number;
   errorFlagCount: number;
+  /**
+   * The flags themselves, so the list can explain a count on hover rather
+   * than making the user open the record to find out what "3" meant.
+   * Includes line-item flags, so the number here matches the record screen.
+   */
+  flags: FieldFlag[];
   /**
    * Set when a human explicitly accepted the record. A reviewed record keeps
    * its flags, so without this the list cannot tell "extracted cleanly" from
