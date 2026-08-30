@@ -294,14 +294,40 @@ immediately after an edit.
 **Upload** — a drop zone accepting PDF and `.xlsx` files, plus buttons that ingest each of the
 four bundled samples.
 
-**Records list** — filename, file kind, status, vendor, grand total, confidence and flag count.
-Records needing attention are listed first.
+**Records list** — filename, file kind, status, vendor, grand total, confidence, flag count and
+the time added. Records needing attention are listed first, and the list can be filtered by
+Needs attention / Reviewed / All. Hovering a flag count expands it into the individual flags with
+their field paths and reasons, so a record can be triaged without opening it.
 
 **Record detail** — a two-pane review screen. The left pane shows the source document: PDFs in an
 embedded viewer, spreadsheets as a download link, since they cannot be previewed in the browser.
 The right pane shows the record as editable fields — header fields, a line-item grid supporting
 edit, add and delete, and a totals section. Flagged fields are outlined and display the reason in
-plain language beneath them, including the relevant figures.
+plain language beneath them, including the relevant figures. A failed record shows why it failed
+in place of the flag list, distinguishing a refused request from output the model mangled.
+
+### Extraction state
+
+Extraction is synchronous and takes tens of seconds, so a single in-flight job is tracked
+application-wide rather than inside the page that started it. Every mutation that runs the
+pipeline registers with that state, which gives three things:
+
+- Only one extraction runs at a time. The drop zone is replaced by a progress panel rather than
+  disabled, since a greyed-out drop target still invites a drop.
+- A compact indicator in the navigation bar, so a running extraction stays visible after
+  navigating away from the upload screen.
+- Editing and re-extraction are disabled on the record screen while any extraction runs.
+
+The progress panel reports the file name, elapsed time and the pipeline stage it is most likely
+in, but no percentage — a single synchronous request has no progress to report, and an estimated
+stage is honest where a fabricated percentage is not. The state clears on failure as well as
+success, so a failed job cannot leave the application permanently locked.
+
+### Record status in the interface
+
+Marking a record reviewed sets its status to `extracted` while leaving its flags in place. The
+list therefore shows a separate `Reviewed` state, derived from `reviewedAt`, so a record a person
+accepted with known problems is not displayed identically to one that had nothing flagged.
 
 Below the totals, a live arithmetic summary mirrors the server's two-stage reconciliation and
 updates as values are edited. This is a client-side convenience; the server recomputes and remains
@@ -339,7 +365,7 @@ cases where extraction succeeds but a value cannot be trusted.
 | Passes disagree on a value | Majority or temperature-0 value used, field flagged |
 | Totals do not reconcile | Field flagged with both figures and the difference |
 | Ambiguous date format | Normalised to one reading, flagged with both interpretations |
-| No valid output after all attempts | Record saved as `failed` with the raw model output retained |
+| No valid output after all attempts | Record saved as `failed` with the raw model output retained, flagged `extraction_failed` with a reason distinguishing a refused request from output the model mangled |
 | Rate limit or service error | Retried with backoff, not treated as an extraction failure |
 
 Flags carry a field path, a reason, a severity and a human-readable explanation containing the

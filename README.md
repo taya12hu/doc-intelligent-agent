@@ -17,6 +17,8 @@ Uncertain values are flagged for human review rather than silently accepted.
 - Review flags with plain-language reasons on uncertain fields
 - Inline editing of header fields and line items
 - Original document shown alongside the extracted record
+- Live progress while a document is processed, with one document at a time
+- Review queue filterable by state, with flag details on hover
 - Extraction status, confidence score and provenance stored per record
 - Records persisted in Supabase Postgres, original files in Supabase Storage
 
@@ -102,10 +104,25 @@ npm run dev
 | API | http://localhost:4000 |
 
 Open the frontend and drag a PDF or `.xlsx` invoice onto the upload area. The file is stored,
-extracted and saved, and the browser opens the resulting record.
+extracted and saved, and the browser opens the resulting record. The upload page also has
+buttons for the four bundled sample invoices, which can be ingested with one click.
 
-The upload page also has buttons for the four bundled sample invoices, which are committed in
-`samples/input` and can be ingested with one click.
+There are three screens:
+
+| Screen | Purpose |
+|---|---|
+| **Upload** | Drop zone and the bundled samples |
+| **Records** | Review queue, filterable by Needs attention / Reviewed / All |
+| **Record** | Two-pane review: source document beside the editable record |
+
+Extraction runs synchronously and takes roughly 10–40 seconds, so **only one document is
+processed at a time**. While a document is running, the upload area is replaced by a progress
+panel showing the file name, elapsed time and the current pipeline stage, and a compact
+indicator stays in the navigation bar from any page. Editing and re-extraction are disabled
+until it finishes.
+
+The panel shows no percentage. Extraction is a single synchronous request with no progress to
+report, so it reports elapsed time and stage rather than a number it cannot know.
 
 The extraction pipeline can also be run from the command line without a database, using only a
 Gemini API key:
@@ -185,9 +202,35 @@ reason beneath them, for example:
 - *Ambiguous date format: "08/03/2025" could be 8 Mar 2025 or 3 Aug 2025*
 
 Saving an edit re-runs the checks on the server, so flags clear when the underlying problem is
-resolved and new ones appear if an edit introduces an inconsistency. A record can be marked
-reviewed even with flags outstanding, since some — an ambiguous date, for example — cannot be
-resolved from the document alone.
+resolved and new ones appear if an edit introduces an inconsistency.
+
+A record can be marked reviewed even with flags outstanding, since some — an ambiguous date,
+for example — cannot be resolved from the document alone. Reviewed records are shown with their
+own status, distinct from records that had nothing flagged in the first place, so accepting a
+record with known problems is not confused with a clean extraction.
+
+### The review queue
+
+Records are listed with anything needing attention first. Because marking a record reviewed
+moves it down that order, the list can be filtered by **Needs attention**, **Reviewed** or
+**All**, and shows the time each document was added — several uploads of the same file are
+otherwise indistinguishable.
+
+Hovering a record's flag count expands it into the individual flags, each with its field path
+and reason, so a record can be triaged without opening it.
+
+### When extraction fails
+
+A failed record explains why rather than only reporting that it failed, since the causes need
+different responses:
+
+| Cause | What it means |
+|---|---|
+| Quota exhausted | The API refused the request; the document was never read |
+| Service unreachable | Retries did not get through; worth trying again shortly |
+| No usable output | The model responded but never returned a valid record |
+
+The raw model output is kept with the record in every case.
 
 ## Validation and Reliability
 
