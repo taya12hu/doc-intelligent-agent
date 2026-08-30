@@ -14,6 +14,12 @@ export const FLAG_REASONS = [
   'missing',
   /** A value was present but could not be coerced into a number or date. */
   'unparseable',
+  /**
+   * Extraction produced no usable record at all. Distinct from `unparseable`,
+   * which is about one field's value: this says the run never got far enough
+   * to have field values to judge.
+   */
+  'extraction_failed',
   /** The model listed this field in `meta.illegibleFields` — it could not read it. */
   'illegible_source',
   /** Reconciliation stage 1 or 2 did not balance. */
@@ -60,6 +66,7 @@ export type FieldFlag = z.infer<typeof FieldFlagSchema>;
 export const SEVERITY_BY_REASON: Record<FlagReason, FlagSeverity> = {
   missing: 'warn',
   unparseable: 'error',
+  extraction_failed: 'error',
   illegible_source: 'error',
   math_mismatch: 'error',
   row_math_mismatch: 'warn',
@@ -97,6 +104,7 @@ export const flag = (
 const HEADLINES: Record<FlagReason, string> = {
   missing: "Couldn't find this in the document",
   unparseable: "Found something here, but couldn't read it as a number",
+  extraction_failed: 'The extraction did not complete',
   illegible_source: 'The model reported this as unreadable rather than guessing',
   math_mismatch: "Doesn't add up",
   row_math_mismatch: "This row's quantity x price doesn't match its total",

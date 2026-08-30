@@ -84,6 +84,30 @@ export type RunResult = {
  */
 const temperatureFor = (index: number): number => (index === 0 ? 0 : 0.4);
 
+/**
+ * Why nothing usable came back.
+ *
+ * A request the provider refused and a response the model mangled are
+ * different failures and need different wording. Reusing a field-level
+ * "couldn't read it as a number" for either was wrong — on a quota failure
+ * no value was ever read, so there was nothing to fail to parse.
+ */
+export const describeTotalFailure = (repairLog: RepairStep[]): string => {
+  const transport = repairLog.some((s) => /transport failure/i.test(s.action));
+  const lastError = [...repairLog].reverse().find((s) => s.error)?.error ?? '';
+
+  if (transport) {
+    return /quota/i.test(lastError)
+      ? 'the model API refused the request because its quota is exhausted — the ' +
+          'document was never read'
+      : 'the model API could not be reached after retries — the document was never read';
+  }
+  return (
+    'the model responded but never produced a valid record, across the repair loop ' +
+    'and an escalation — its raw output is kept with this record'
+  );
+};
+
 export const runExtraction = async (input: RunInput): Promise<RunResult> => {
   const sampleCount = input.samples ?? env.EXTRACTION_SAMPLES;
 
@@ -165,14 +189,7 @@ export const runExtraction = async (input: RunInput): Promise<RunResult> => {
       ...base,
       invoice: emptyInvoice(),
       meta,
-      flags: [
-        flag(
-          '_record',
-          'unparseable',
-          'the model never produced a valid record, across the repair loop and an ' +
-            'escalation — the raw response is kept below',
-        ),
-      ],
+      flags: [flag('_record', 'extraction_failed', describeTotalFailure(repairLog))],
       confidence: 0,
       status: 'failed',
       raw: {
