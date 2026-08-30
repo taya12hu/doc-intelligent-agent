@@ -9,6 +9,14 @@ import { Logo } from '../components/Logo.js';
 const ACCEPTED = '.pdf,.xlsx,.xls';
 const MAX_BYTES = 10 * 1024 * 1024;
 
+/** Short tag per sample. The full description stays as a hover title. */
+const SAMPLE_TAG: Record<string, string> = {
+  acme: 'Clean PDF',
+  northwind: 'Awkward layout',
+  blueridge: 'Scanned',
+  zenith: 'Excel',
+};
+
 export const Upload = () => {
   const navigate = useNavigate();
   const [dragging, setDragging] = useState(false);
@@ -23,8 +31,8 @@ export const Upload = () => {
 
   /**
    * Reject obviously-wrong files before spending an upload and an extraction
-   * on them. The server validates properly by magic bytes; this is just to
-   * fail fast with a clear message instead of after a round trip.
+   * on them. The server validates properly by magic bytes; this only fails
+   * fast with a clear message instead of after a round trip.
    */
   const validate = (file: File): string | null => {
     if (file.size > MAX_BYTES) {
@@ -48,10 +56,7 @@ export const Upload = () => {
 
   const handleSample = (key: string, label: string) => {
     setLocalError(null);
-    runSample.mutate(
-      { key, label },
-      { onSuccess: (r) => navigate(`/records/${r.document.id}`) },
-    );
+    runSample.mutate({ key, label }, { onSuccess: (r) => navigate(`/records/${r.document.id}`) });
   };
 
   const requestError = upload.error ?? runSample.error;
@@ -64,51 +69,26 @@ export const Upload = () => {
         : null);
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12">
+    <div className="mx-auto flex min-h-full max-w-xl flex-col justify-center px-6 py-16">
       <header className="text-center">
-        <Logo className="mx-auto h-11 w-11" />
-        <h1 className="mt-4 text-3xl font-semibold tracking-tight text-stone-900">
+        <Logo className="mx-auto h-10 w-10" />
+        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-stone-900">
           Extract an invoice
         </h1>
-        <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-stone-600">
-          Upload a PDF or Excel invoice. The fields are read by a language model, checked
-          against the document's own arithmetic, and anything that can't be confirmed is
-          flagged for you to review.
+        {/* One line. The detail belongs on the record screen, where it is
+            attached to the value it describes, rather than as preamble. */}
+        <p className="mt-2 text-sm text-stone-500">
+          PDF or Excel. Anything uncertain is flagged for review.
         </p>
-
-        {/* The three checks, stated up front. They are what distinguishes this
-            from pasting a document into a chat window and trusting the reply. */}
-        <ul className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-stone-500">
-          {[
-            'Text and scanned PDFs',
-            'Totals reconciled independently',
-            'Uncertain values flagged, not guessed',
-          ].map((item) => (
-            <li key={item} className="flex items-center gap-1.5">
-              <svg
-                aria-hidden
-                viewBox="0 0 16 16"
-                className="h-3.5 w-3.5 shrink-0 text-emerald-600"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="m3.5 8.5 3 3 6-6.5" />
-              </svg>
-              {item}
-            </li>
-          ))}
-        </ul>
       </header>
 
-      {/* While a job runs, the drop zone is replaced entirely rather than
-          dimmed. A greyed-out target still invites a drop; removing it makes
-          the one-at-a-time rule obvious without needing to explain it. */}
+      {/* While a job runs the drop zone is replaced rather than dimmed: a
+          greyed-out target still invites a drop. */}
       {busy ? (
         <div className="mt-8">
           <ExtractionProgress />
           <p className="mt-3 text-center text-xs text-stone-500">
-            One document is processed at a time. You'll be taken to the record when it's done.
+            One document at a time. You'll be taken to the record when it's done.
           </p>
         </div>
       ) : (
@@ -124,10 +104,10 @@ export const Upload = () => {
             const file = e.dataTransfer.files[0];
             if (file) handleFile(file);
           }}
-          className={`mt-8 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-14 transition-colors ${
+          className={`mt-8 flex flex-col items-center justify-center rounded-2xl border border-dashed px-6 py-16 transition-all ${
             dragging
-              ? 'border-sky-400 bg-sky-50'
-              : 'border-stone-300 bg-white hover:border-stone-400 hover:bg-stone-50'
+              ? 'border-sky-400 bg-sky-50 ring-4 ring-sky-100'
+              : 'border-stone-300 bg-white hover:border-stone-400 hover:shadow-sm'
           }`}
         >
           <input
@@ -140,24 +120,24 @@ export const Upload = () => {
               e.target.value = ''; // allow re-selecting the same file
             }}
           />
-          <svg
-            aria-hidden
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="mb-3 h-8 w-8 text-stone-400"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 16.5V6m0 0L8.25 9.75M12 6l3.75 3.75M4.5 16.5v1.875A2.625 2.625 0 007.125 21h9.75a2.625 2.625 0 002.625-2.625V16.5"
-            />
-          </svg>
-          <span className="text-sm font-medium text-stone-700">
-            Drop a file here, or click to choose
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-stone-100">
+            <svg
+              aria-hidden
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              className="h-5 w-5 text-stone-500"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 16.5V6m0 0L8.25 9.75M12 6l3.75 3.75M4.5 16.5v1.875A2.625 2.625 0 007.125 21h9.75a2.625 2.625 0 002.625-2.625V16.5"
+              />
+            </svg>
           </span>
-          <span className="mt-1 text-xs text-stone-500">PDF or Excel, up to 10 MB</span>
+          <span className="mt-3 text-sm font-medium text-stone-800">Drop a file here</span>
+          <span className="mt-0.5 text-xs text-stone-400">or click to choose · up to 10 MB</span>
         </label>
       )}
 
@@ -174,39 +154,37 @@ export const Upload = () => {
       )}
 
       {samples && samples.length > 0 && (
-        <section className="mt-12">
-          <h2 className="text-xs font-semibold tracking-wide text-stone-500 uppercase">
-            Sample invoices
-          </h2>
-          <p className="mt-1 text-xs text-stone-500">
-            Four invoices with different layouts and quality. The scanned one is intentionally
-            difficult.
-          </p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {samples.map((s) => {
-              const disabled = busy || !s.available;
-              return (
-                <button
-                  key={s.key}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => handleSample(s.key, s.label)}
-                  title={
-                    busy
-                      ? 'Wait for the current extraction to finish'
-                      : !s.available
-                        ? 'Run `npm run samples:generate` to create this file'
-                        : undefined
-                  }
-                  className="rounded-lg border border-stone-200 bg-white px-3.5 py-3 text-left transition-all hover:border-stone-400 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-stone-200 disabled:hover:shadow-none"
-                >
-                  <span className="block text-sm font-medium text-stone-800">{s.label}</span>
-                  <span className="mt-0.5 block text-xs leading-relaxed text-stone-500">
-                    {s.available ? s.blurb : 'Not generated yet'}
-                  </span>
-                </button>
-              );
-            })}
+        <section className="mt-10">
+          <div className="mb-3 flex items-center gap-3">
+            <span className="h-px flex-1 bg-stone-200" />
+            <span className="text-xs text-stone-400">or try a sample</span>
+            <span className="h-px flex-1 bg-stone-200" />
+          </div>
+
+          {/* Name plus a two-word tag. The full description is the hover
+              title — enough to choose one without a paragraph each. */}
+          <div className="flex flex-wrap justify-center gap-2">
+            {samples.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                disabled={busy || !s.available}
+                onClick={() => handleSample(s.key, s.label)}
+                title={
+                  busy
+                    ? 'Wait for the current extraction to finish'
+                    : s.available
+                      ? s.blurb
+                      : 'Run `npm run samples:generate` to create this file'
+                }
+                className="group flex items-center gap-2 rounded-full border border-stone-200 bg-white py-1.5 pr-3 pl-3.5 text-sm transition-all hover:border-stone-400 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-stone-200 disabled:hover:shadow-none"
+              >
+                <span className="font-medium text-stone-700">{s.label}</span>
+                <span className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-500">
+                  {SAMPLE_TAG[s.key] ?? 'Sample'}
+                </span>
+              </button>
+            ))}
           </div>
         </section>
       )}

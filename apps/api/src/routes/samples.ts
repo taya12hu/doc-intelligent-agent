@@ -40,7 +40,7 @@ const SAMPLES = [
   {
     key: 'blueridge',
     filename: 'blue-ridge-scan.pdf',
-    label: 'Blue Ridge (scanned)',
+    label: 'Blue Ridge',
     blurb: 'Degraded scan. Should flag, not guess.',
   },
   {
