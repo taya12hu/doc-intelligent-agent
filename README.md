@@ -1,415 +1,333 @@
 # Document Intelligence Agent
 
-Turns messy vendor invoices — clean PDFs, awkward layouts, a deliberately degraded scan, an
-awkward spreadsheet — into structured records a human can review and correct.
+A web application that turns vendor invoices into structured, reviewable records. It accepts
+PDF and Excel invoices, extracts the invoice fields and line items using Gemini, validates the
+result against a schema and a set of arithmetic checks, and flags anything it could not confirm.
 
-The interesting part isn't the extraction. It's what happens when the model is wrong.
+A reviewer can then open the record next to the original document, correct any field, and save.
+Uncertain values are flagged for human review rather than silently accepted.
 
----
+## Features
 
-## The one idea
+- Upload invoices as PDF or Excel
+- Handles both text-based and scanned PDFs
+- Structured extraction into a validated schema
+- Schema validation plus arithmetic and business-rule checks
+- Automatic repair and retry when model output is malformed
+- Review flags with plain-language reasons on uncertain fields
+- Inline editing of header fields and line items
+- Original document shown alongside the extracted record
+- Extraction status, confidence score and provenance stored per record
+- Records persisted in Supabase Postgres, original files in Supabase Storage
 
-**A confidently wrong number is the only real failure mode.**
+## Tech Stack
 
-A field we couldn't read and *said so* costs a reviewer five seconds. A field we got wrong and
-asserted confidently is never questioned again — it flows into a spreadsheet, a model, a
-decision. Those two outcomes look identical under "accuracy" and could not be more different in
-practice.
+| Layer | Technology |
+|---|---|
+| Frontend | React, TypeScript, Tailwind CSS, Vite, TanStack Query |
+| Backend | Node.js, Express, TypeScript |
+| LLM | Gemini (`@google/genai`) |
+| Validation | Zod |
+| Database | Supabase Postgres with Drizzle ORM |
+| File storage | Supabase Storage |
+| Document parsing | `pdfjs-dist` (PDF classification), SheetJS (Excel) |
 
-So every design decision here optimises for the same thing: **the system knows when it doesn't
-know, and says so.** Three mechanisms, in increasing order of how much I trust them:
+## Getting Started
 
-| Signal | Catches | Why trust it |
-|---|---|---|
-| The model reports what it couldn't read | Illegible source | Cheap, but it's still the model's opinion |
-| Cross-sample disagreement | Uncertainty | An empirical measurement, not a self-report |
-| Arithmetic reconciliation | **Actual error** | Doesn't involve the model at all |
+### Prerequisites
 
-That ordering matters. Three passes can *agree* on a hallucinated total; they cannot make it
-add up.
+- Node.js 20 or later
+- A Gemini API key — [Google AI Studio](https://aistudio.google.com/apikey)
+- A Supabase project — [supabase.com](https://supabase.com)
 
----
-
-## Setup
-
-Needs Node 20+, a Gemini API key, and a Supabase project.
-
-The free tier works but is **20 requests per day per model**, which is roughly two full eval
-runs. If you plan to click around much, either enable billing or drop `EXTRACTION_SAMPLES` to
-`1`. This is the single most annoying constraint on the project and it's covered properly under
-[limitations](#known-limitations).
+### Installation
 
 ```bash
+git clone https://github.com/taya12hu/doc-intelligent-agent.git
+cd doc-intelligent-agent
 npm install
+```
+
+### Configuration
+
+Copy the example environment file and fill it in:
+
+```bash
 cp .env.example .env
 ```
 
-Fill in `.env` — every variable is documented in `.env.example`. Then:
+| Variable | Where to find it |
+|---|---|
+| `GEMINI_API_KEY` | Google AI Studio |
+| `GEMINI_MODEL` | Primary extraction model (default `gemini-3.6-flash`) |
+| `GEMINI_ESCALATION_MODEL` | Fallback model used when the first attempt fails validation |
+| `EXTRACTION_SAMPLES` | Number of extraction passes to compare (default `2`) |
+| `SUPABASE_URL` | Supabase → Settings → API |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API (service role, server-side only) |
+| `DATABASE_URL` | Supabase → Settings → Database → Connection string (URI) |
+
+Use the session pooler connection string (port 5432). The transaction pooler (port 6543) also
+works — the database client detects it and disables prepared statements automatically.
+
+### Verify models
+
+Model availability varies by API key and tier. This command calls each configured model directly
+and reports whether it responds:
 
 ```bash
 npm run check:models
 ```
 
-**Run this first.** It makes a real call to each configured model. It does *not* just check
-the model list, because being listed doesn't mean being callable — on a free-tier key
-`gemini-2.5-pro` returns 404 ("no longer available to new users") and `gemini-3.7-flash` is
-frequently 503, yet both appear in `listModels()`. If it fails, it prints what you *can* use.
+If a model is unavailable, the command lists the models the key can see so you can update `.env`.
+
+### Set up the database
+
+Applies the schema and creates the storage bucket:
 
 ```bash
-npm run db:migrate   # applies the schema and creates the storage bucket
-npm run dev          # API on :4000, web on :5173
+npm run db:migrate
 ```
 
-The four sample invoices are already committed in `samples/input/`, so there's nothing to
-generate. (`npm run samples:generate` rebuilds them from the fixture — useful if you want to
-change the difficulty, not needed to run the thing.)
+### Run
 
-Open http://localhost:5173 and use a **Try a sample** button. Start with **Blue Ridge
-(scanned)** — that's the one designed to fail informatively.
+```bash
+npm run dev
+```
 
-### Without a database
+## Running the Application
 
-The extraction pipeline is the interesting part and it doesn't need Postgres. With only
-`GEMINI_API_KEY` set:
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| API | http://localhost:4000 |
+
+Open the frontend and drag a PDF or `.xlsx` invoice onto the upload area. The file is stored,
+extracted and saved, and the browser opens the resulting record.
+
+The upload page also has buttons for the four bundled sample invoices, which are committed in
+`samples/input` and can be ingested with one click.
+
+The extraction pipeline can also be run from the command line without a database, using only a
+Gemini API key:
 
 ```bash
 npm run extract -- samples/input/blue-ridge-scan.pdf
-npm run prepare:doc -- samples/input/zenith-parts.xlsx   # what the model actually sees
-npm run test                                             # 109 tests, no network
+npm run prepare:doc -- samples/input/zenith-parts.xlsx   # shows what the model receives
 ```
 
----
+## Sample Documents
 
-## How it works
+Four sample invoices are included, generated from a single fixture that also defines their
+expected extraction results.
 
-```
-upload ─▶ classify ─▶ prepare ─▶ N passes ─▶ consensus ─▶ checks ─▶ confidence ─▶ persist
-          (bytes)     (per kind)  (repair     (vote)      (pure)     + status
-                                   ladder)
-```
-
-**Classify** from magic bytes, never the declared MIME type or extension — both are trivially
-wrong and one is attacker-controlled. A PDF text-layer probe under 50 chars/page means it's a
-scan. The four samples land at 677 / 874 / 0, so the threshold sits in genuinely empty space.
-
-**Prepare** is deliberately trivial for PDFs: hand Gemini the raw bytes. Extracting text first
-flattens the table structure that makes an invoice readable — pdfjs turns Acme's line items
-into `Description Qty Unit Price Amount A4 Copier Paper, 80gsm (ream) 40 4.25 170.00`, strictly
-worse than the page itself. Spreadsheets get the opposite treatment (Gemini can't open a zip of
-XML), rendered as markdown with **column letters and row numbers preserved** so "the total four
-rows below the table" stays true, and merged ranges listed explicitly.
-
-**Passes** run sequentially at temperature 0, 0.4, 0.4. Each goes through a repair ladder,
-cheapest rung first:
-
-```
-0. local repair    no API call — fences, trailing commas, truncation
-1. type coercion   no API call — "Rs. 1,41,077.85" → 141077.85
-2. repair call     show the model its own output and the exact zod error
-3. escalation      retry once on a different model, double the token ceiling
-4. give up         status 'failed', raw output kept, every field flagged
-```
-
-Spending a round trip to fix a trailing comma is two wasted seconds and a wasted request, so
-rungs 0–1 exist to make that never happen. Hard cap of 4 calls per pass.
-
-**Consensus** votes field by field. Unanimous is clean; 2-of-3 is a warning and takes the
-majority; a three-way split is an error and keeps the temperature-0 reading.
-
-**Checks** are pure functions that never touch a model — two-stage reconciliation, row
-arithmetic, missing fields, ambiguous dates, and an order-of-magnitude sanity net.
-
-**Confidence** is computed. `meta.legibility` appears only as a *multiplier*, so the model can
-pull a score down and never prop one up.
-
----
-
-## Decisions worth defending
-
-### Gemini, and why that simplified everything
-
-Document understanding is Gemini's strongest capability, and native PDF input means text PDFs
-and scanned PDFs go down the **same code path** — no rasterising, no DPI tuning, no
-per-request image cap. `responseSchema` composes with document input, so it's one call in, JSON
-out.
-
-I'd sketched this against Groq first. There, structured outputs don't compose with image input
-at all, which forces a two-stage transcribe-then-structure pipeline. That's more machinery
-existing purely to work around a platform limitation. Choosing the tool that doesn't have the
-limitation was worth roughly 40 minutes of build time and a whole dependency.
-
-### An explicit subtotal / discount / tax band
-
-Beyond the brief's required fields, and the single most important schema decision here.
-
-Without them, *any* invoice carrying tax makes `sum(lineItems) ≠ grandTotal`, and the strongest
-check in the system fires a false positive on a **perfectly correct extraction**. Sample #2
-(Northwind) exists specifically to prove this: its lines sum to ₹125,850 against a total of
-₹141,077.85, entirely legitimately.
-
-Three nullable numbers turn one brittle check into two:
-
-```
-stage 1   Σ line items              → subtotal
-stage 2   subtotal − discount + tax → grand total
-```
-
-Stricter *and* quieter. **A flag that fires when nothing is wrong is worse than no flag** — it
-teaches the reviewer to ignore the amber rings, which breaks the one feature everything else
-here serves.
-
-The alternative — letting tax and discount masquerade as line items with negative totals —
-makes the sum balance but corrupts the line-item table the human has to review.
-
-### Self-consistency instead of self-reported confidence
-
-An LLM's stated confidence is weakly calibrated and correlates with fluency more than accuracy.
-What *does* correlate is instability: run the same document three times and the fields the model
-is unsure about are the ones whose answers move.
-
-On the degraded scan this lights up exactly where intended — the row-3 unit price came back
-`43.75 / null` across passes, and the tax value `236.55 / 315.40`.
-
-It costs 3× the calls, which is affordable because Flash is cheap. On a frontier model the
-arithmetic would be different, and I'd probably drop to 2 passes.
-
-**The honest caveat: agreement is necessary, not sufficient.** Three passes can agree and all be
-wrong. This catches uncertainty; the arithmetic catches error.
-
-### Recovering blank cells without inventing data
-
-Sample #4 leaves an Amount cell blank. The correct extraction returns `null` — the document
-doesn't contain that number. But then the lines legitimately fail to sum to the printed
-subtotal, and stage 1 would flag a correct reading.
-
-So we derive the value from qty × price **for checking only**, reconcile with it, keep `null` in
-the record, and flag it with the derived number as a suggestion:
-
-> *blank on the document — 8 × 31.25 would be 250.00, but confirm it before accepting*
-
-The reviewer gets the help. The record doesn't get a number the document never had.
-
-### A failed extraction returns 201, not 500
-
-It's a legitimate outcome we successfully recorded: the record exists, carries flags, and keeps
-the raw model output. A 500 would make "this document was unreadable" indistinguishable from
-"the server is broken" — and those need very different things from the person looking at the
-screen.
-
-### The source document sits beside the record
-
-The highest-value UI decision. Reviewing extracted data without the original in view is
-guesswork — you can see the numbers don't add up, but not which one is wrong.
-
-It matters most exactly where the system is weakest. On the scan, the reviewer has to look at
-the coffee stain and decide for themselves what the digits are. Flagging instead of guessing
-only works if the person can see the page.
-
-### Synchronous extraction
-
-A queue is the right production answer and it's first on the list below. At four documents, one
-user and no deployment, it costs an hour and adds a worker plus a polling endpoint that improve
-nothing a reviewer can see. The `pending`/`processing` statuses and timestamps are modelled *as
-if* async, so moving to a queue is a change to one route file rather than a schema migration.
-
----
-
-## The samples
-
-All four are generated by committed scripts from a **single ground-truth fixture**
-(`samples/generate/src/data.ts`), which is also the eval's expectations — so the documents and
-what we expect from them cannot drift apart. The generator refuses to emit anything if a
-fixture's own arithmetic doesn't balance.
-
-The generated documents are committed, so you don't need to run the generator. If you do, note
-that the scan's degradation uses unseeded gaussian noise — you'll get an equivalent but not
-byte-identical file, and `samples/output/` won't match to the digit. Run it when you want to
-change the difficulty, not to reproduce the fixtures.
-
-| # | File | What it's actually testing |
+| File | Format | What it exercises |
 |---|---|---|
-| 1 | `acme-supplies.pdf` | Clean baseline. The control, not a test. |
-| 2 | `northwind-trading.pdf` | Vendor only in the letterhead. "Bill No." not "Invoice Number", with a GSTIN and PAN beside it as decoys that look *more* like identifiers. Indian digit grouping (`1,41,077.85`, which `\d{1,3}(,\d{3})*` doesn't match). Accounting labels: Gross / Less: Discount / Add: GST / Net Payable. |
-| 3 | `blue-ridge-scan.pdf` | Degraded scan, no text layer. See below. |
-| 4 | `zenith-parts.xlsx` | Data not at A1, two labelled blocks, **Unit Price before Qty** (swapped vs every other sample), a decoy block sub-total mid-table that isn't the invoice subtotal, one blank Amount cell. |
+| `acme-supplies.pdf` | Text PDF | A conventional invoice layout — the baseline case |
+| `northwind-trading.pdf` | Text PDF | Unusual field labels, vendor name only in the letterhead, non-Western digit grouping, and a discount and tax band above the total |
+| `blue-ridge-scan.pdf` | Scanned PDF | A degraded scan with no text layer and several values obscured |
+| `zenith-parts.xlsx` | Excel | Data not starting at A1, line items split across two blocks, reordered columns, and a blank amount cell |
 
-### On the scanned one
+The scanned sample is intentionally difficult and is expected to require human review.
+Extraction results for all four are committed in `samples/output`.
 
-| Before degradation | After |
+To regenerate the documents:
+
+```bash
+npm run samples:generate
+```
+
+## How Extraction Works
+
+```
+upload → classify → prepare → Gemini extraction → schema validation
+       → deterministic checks → review flags → save
+```
+
+**Classify.** The file type is determined from its magic bytes rather than the declared MIME
+type or extension. PDFs are additionally checked for an embedded text layer; a PDF without one
+is treated as a scan.
+
+**Prepare.** PDFs are sent to Gemini as raw bytes, so text and scanned PDFs follow the same
+path. Excel files are parsed with SheetJS and converted into Markdown tables that keep column
+letters, row numbers and merged ranges, since position carries meaning in a spreadsheet.
+
+**Extract.** Gemini is called with a response schema derived from the Zod definition, returning
+JSON. Alongside the invoice fields, the model reports which fields it could not read, an overall
+legibility score, and the invoice date exactly as printed.
+
+**Validate.** The response is parsed with Zod. Malformed output is repaired locally where
+possible — stripping code fences, closing truncated JSON, coercing number formats — and only
+then re-sent to the model with the specific validation errors. A second model is used as a
+fallback if that also fails. If nothing valid survives, the record is saved with status `failed`
+and the raw output retained.
+
+**Check.** Independent of the model, the extracted values are checked for arithmetic
+consistency, missing required fields, ambiguous dates and implausible values.
+
+**Flag and save.** Fields that fail a check, that the model reported as unreadable, or that
+differed between extraction passes are flagged with a reason. A confidence score and status are
+derived from the flags, and the record is written to Postgres.
+
+For a fuller description, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Human Review
+
+Each record opens in a two-pane screen. The original document is displayed on the left and the
+extracted record on the right, so values can be checked against the source without leaving the
+page.
+
+Header fields, line items and totals are all editable. Flagged fields are outlined and show the
+reason beneath them, for example:
+
+- *Couldn't find this in the document*
+- *The model reported this as unreadable rather than guessing*
+- *Doesn't add up: line items total 1,240.00 but the document states 1,245.00 — off by 5.00*
+- *Ambiguous date format: "08/03/2025" could be 8 Mar 2025 or 3 Aug 2025*
+
+Saving an edit re-runs the checks on the server, so flags clear when the underlying problem is
+resolved and new ones appear if an edit introduces an inconsistency. A record can be marked
+reviewed even with flags outstanding, since some — an ambiguous date, for example — cannot be
+resolved from the document alone.
+
+## Validation and Reliability
+
+A response that parses as valid JSON is not treated as evidence that its values are correct. The
+system applies several independent layers:
+
+- **Schema validation.** Every response is parsed with Zod. All fields are nullable and none are
+  optional, so a value the model did not find is an explicit `null` rather than an absent key.
+- **Repair and retry.** Malformed output is repaired locally first, then sent back to the model
+  with its validation errors, then retried on a fallback model.
+- **Arithmetic checks.** Line totals are reconciled against the subtotal, and the subtotal less
+  discount plus tax against the grand total. Each row's quantity times unit price is checked
+  against its own total. These checks do not involve the model.
+- **Missing and implausible values.** Required fields that are null, negative totals,
+  out-of-range dates and order-of-magnitude mismatches are all flagged.
+- **Ambiguity detection.** The date as printed is retained, so `MM/DD` and `DD/MM` ambiguity
+  remains detectable after normalisation.
+- **Multiple extraction passes.** Extraction runs more than once by default and the results are
+  compared field by field. Fields that differ between passes are flagged as unstable.
+- **Confidence and status.** A confidence score is computed from the flags and the model's
+  reported legibility, and each record is marked `extracted`, `needs_review` or `failed`.
+
+Comparing passes indicates whether a value is stable, not whether it is correct — passes can
+agree and still be wrong. The arithmetic checks are what detect inconsistent values.
+
+## Database
+
+Three tables:
+
+| Table | Contents |
 |---|---|
-| ![clean render](samples/reference/blue-ridge-before-degradation.png) | ![degraded scan](samples/reference/blue-ridge-after-degradation.jpg) |
+| `documents` | One row per uploaded file: filename, detected type, storage path, status |
+| `extractions` | One row per extraction attempt: the invoice header and totals, flags, confidence, status, and provenance such as model used, attempt counts and the repair log |
+| `line_items` | One row per invoice line, belonging to an extraction |
 
-Both are committed in `samples/reference/` — the pre-degradation render is the evidence that #3
-is adversarial *by construction* rather than an accident of a bad generator.
+`documents` has many `extractions`; `extractions` has many `line_items`. Re-running extraction
+inserts a new `extractions` row and marks the previous one as no longer current, so earlier
+results are preserved.
 
-Authored as SVG rather than laid out with pdfkit, so every value has a known coordinate and the
-degradation could be **targeted rather than uniform**. A uniformly mushy page fails uniformly and
-proves nothing.
+Line items are stored in their own table rather than as JSON on the extraction so individual
+rows can be edited, added or deleted, and so the server can re-run arithmetic checks against the
+result. Monetary values use Postgres `numeric` rather than floating point.
 
-Global: rotated −2.4°, blurred, gaussian noise, contrast crushed to a faded-photocopy range,
-resampled through 110 DPI, JPEG quality 20. Then three planted difficulties: a coffee ring with
-ink bleed over the grand total, glyph-ambiguous date digits, and one unit price in the darkest
-band.
+## API
 
-Most of the page stays readable — vendor, invoice number, the line items, the subtotal — while
-those three values are genuinely ambiguous. That contrast is the point: you can watch the system
-draw a line between what it knows and what it doesn't.
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/documents` | Upload a file, run extraction, return the record |
+| `GET` | `/api/documents` | List records |
+| `GET` | `/api/documents/:id` | Full record with extraction and line items |
+| `GET` | `/api/documents/:id/file` | Redirect to a signed URL for the original file |
+| `POST` | `/api/documents/:id/reextract` | Re-run extraction on a stored document |
+| `PATCH` | `/api/extractions/:id` | Update header or total fields |
+| `POST` | `/api/extractions/:id/line-items` | Add a line item |
+| `POST` | `/api/extractions/:id/review` | Mark the record reviewed |
+| `PATCH` | `/api/line-items/:id` | Update a line item |
+| `DELETE` | `/api/line-items/:id` | Delete a line item |
+| `GET` | `/api/samples` | List bundled sample documents |
+| `POST` | `/api/samples/:key` | Ingest a bundled sample |
+| `GET` | `/api/health` | Service status and active model |
 
-Two calibration notes, because neither was obvious:
+A failed extraction is returned as `201` with `status: "failed"` and the raw model output
+attached, since it is a recorded outcome rather than a server fault.
 
-- **The resample round-trip is the only irreversible step** and decides everything. 0.73 leaves
-  everything readable; 0.42 destroys the document; 0.55 makes body text marginal.
-- **I tuned the local blurs *down*, from 3.4 to 2.6.** At the higher value the fields were
-  *erased*, and an erased field is the easy case — the model reports it illegible and all three
-  passes agree. The interesting case is a value it can *almost* read, because that's where it
-  guesses.
+## Testing
 
-**Rule I held to: calibrate the generator, never the prompt.** Tuning a prompt to pass a test you
-wrote yourself is exactly the self-deception this exercise is screening for.
+The unit and integration tests cover the extraction pipeline, validation, repair handling,
+consensus and the deterministic checks. They use a scripted fake provider and make no network
+calls.
 
----
-
-## Results
-
-`npm run eval` runs all four and scores against ground truth. The headline metric is not
-accuracy:
-
-```
-correct        matched the document
-flagged        wrong or missing, but we said so
-SILENTLY WRONG wrong, and we claimed otherwise    ← the only number that matters
-```
-
-Run on `gemini-3.6-flash`, `EXTRACTION_SAMPLES=2`. Committed results are in `samples/output/`.
-
-```
-sample      status        expected        correct  flagged   silent
-acme        extracted     extracted            24        0        0
-northwind   extracted     extracted            24        0        0
-blueridge   needs_review  needs_review         23        1        0
-zenith      needs_review  needs_review         32        0        0
-──────────────────────────────────────────────────────────────────
-TOTAL                                         103        1        0
-                                            99.0%     1.0%     0.0%
+```bash
+npm test
 ```
 
-**Zero silently wrong across all four documents**, and every status matched what the fixture
-expected. The single non-correct field is Blue Ridge's grand total, sitting under the coffee
-stain — the model returned `null`, reported the region unreadable, and the record came back
-`needs_review` at 49% confidence. That is the designed outcome, not a miss.
+An evaluation script runs all four samples through the pipeline and compares the results against
+the expected values in `samples/truth.json`:
 
-Worth being precise about what this does and doesn't show. It's **four documents I wrote
-myself**, so it measures "does the machinery behave as designed on its own fixtures", not
-real-world accuracy. What it does establish is the property the whole system is built around:
-nothing was wrong *and* silent.
-
-Flags actually raised on the two hard documents:
-
-```
-blueridge   [error] taxTotal                disagreement
-            [warn]  grandTotal              missing
-            [error] grandTotal              illegible_source
-            [warn]  invoiceDate             ambiguous_date
-zenith      [warn]  lineItems[4].lineTotal  missing
-            [error] lineItems[4].lineTotal  illegible_source
+```bash
+npm run eval
 ```
 
-Three of the four planted difficulties on Blue Ridge were caught, plus Zenith's blank cell. The
-fourth — row 3's unit price — both passes read correctly (`43.75`), so nothing fired. The eval
-reports that as **information, not a failure**: the guarantee is *correct or flagged*, and it
-was correct. An earlier version of the scorer failed the run for this, which had it marking the
-system down for succeeding.
+It reports each field as correct, flagged, or wrong-and-unflagged, and exits non-zero if any
+field is wrong without a flag. A recent run:
 
-**Blue Ridge varies between runs** — `needs_review` at 36–49% confidence, occasionally `failed`
-at 8% when both passes decline more of the stained values. Both are correct behaviour: the
-system refusing to trust what it can't read. It does mean this row isn't reproducible to the
-digit, which is the honest cost of a genuinely ambiguous document, and I'd rather say so than
-show you a hand-picked run.
+| Sample | Status | Correct | Flagged | Wrong, unflagged |
+|---|---|---|---|---|
+| acme | `extracted` | 24 / 24 | 0 | 0 |
+| northwind | `extracted` | 24 / 24 | 0 | 0 |
+| blueridge | `needs_review` | 23 / 24 | 1 | 0 |
+| zenith | `needs_review` | 32 / 32 | 0 | 0 |
+| **Total** | | **103 / 104** | **1** | **0** |
 
-The eval exits non-zero if anything is silently wrong, so it works as a gate.
+The one non-matching field is the grand total on the scanned sample, which is obscured on the
+document; it was returned as null and flagged rather than guessed.
 
----
+These four documents are synthetic and were written alongside the system, so these numbers do
+not establish real-world accuracy. They confirm that the pipeline behaves as intended on known
+inputs, including the difficult ones. Results on the scanned sample vary between runs.
 
-## Known limitations
+## Known Limitations
 
-- **Extraction is synchronous.** A slow document blocks the request. Fine at this scale, wrong
-  in production.
-- **Confidence weights are reasoned, not fitted.** With four documents there's nothing to
-  calibrate against, and pretending otherwise would be false precision.
-- **Self-consistency detects instability, not correctness.** Three passes can agree and all be
-  wrong.
-- **`responseSchema` guarantees shape, not truth.** Schema-valid and semantically wrong is the
-  failure that actually hurts; only the deterministic checks catch it.
-- **Scanned quality depends entirely on the vision model.** There's no dedicated OCR fallback and
-  no per-character confidence to lean on — a page Gemini can't read is a page we can't read.
-- **`MM/DD` vs `DD/MM` is guessed and flagged, not resolved.** It cannot be resolved from a
-  single document without vendor context.
-- **The Gemini free tier is 20 requests per _day_ per model**, and this is the single biggest
-  practical constraint on the project. The 5-per-minute limit is the one you hit first and it is
-  *not* the binding one — I lost real time retrying a daily cap that was never going to clear.
-  The whole daily budget is 5 eval runs at `EXTRACTION_SAMPLES=1`, 2 at `=2`, or 1 at `=3`,
-  before any repair calls or clicking around the UI. The provider now detects a daily
-  exhaustion and fails immediately with a clear message rather than waiting out four windows
-  against a cap that resets at midnight. **Default is 2** — 3 is the better design and what
-  §5.6 describes, but a reviewer who clones this and immediately cannot run it is a worse
-  outcome than losing the 2-of-3 nuance.
-- **A pass lost to quota legitimately downgrades the record.** If one of the passes fails, the
-  consensus is built from the rest and the record carries `1 of 3 extraction passes failed;
-  consensus is based on 2` — which flips it to `needs_review`. That is the system being honest
-  rather than a bug, but it means status can vary run to run on a constrained key.
-- **Single-currency assumption** in the arithmetic checks. Mixed-currency invoices are flagged,
-  not handled.
-- **Long invoices** can hit `MAX_TOKENS` mid-JSON. We detect it, recover what's complete, flag
-  the truncation and escalate — but very long documents remain a real limit.
-- **No auth.** Anyone with the URL can read and edit everything. Explicitly out of scope.
+- Extraction runs synchronously within the upload request, so a slow document holds the
+  connection open.
+- Confidence weights are set by hand rather than calibrated against labelled data.
+- Agreement between extraction passes indicates stability, not correctness.
+- Scanned document quality depends entirely on the vision model. There is no separate OCR stage
+  and no per-character confidence.
+- Ambiguous `MM/DD` and `DD/MM` dates are normalised to one reading and flagged; they cannot be
+  resolved from a single document.
+- Arithmetic checks assume a single currency per invoice.
+- Long invoices can exceed the model's output token limit. Truncation is detected and partially
+  recovered, but very long documents remain a limit.
+- Gemini's free tier is rate-limited per day per model, which restricts how many extractions can
+  be run.
+- There is no authentication. Anyone with access to the API can read and modify all records.
 
----
+## Future Improvements
 
-## What I'd do differently with more time
+- Move extraction to a background worker with status polling.
+- Add a dedicated OCR stage for scanned documents to obtain word-level confidence scores.
+- Store field edits in a dedicated audit table rather than a JSON column.
+- Calibrate confidence weights against a larger labelled dataset.
+- Return source regions per field and highlight them in the document viewer.
+- Add a second LLM provider behind the existing provider interface.
 
-Roughly in order of what I'd reach for first:
-
-1. **Async extraction** — a queue and status polling. The right answer at any real volume.
-2. **A proper audit trail.** Edits currently append to `raw.edits`; a `field_edits` table with a
-   diff view is the real answer. **Corrections are training data** and this schema throws most of
-   that signal away.
-3. **Calibrate confidence against a few hundred labelled invoices** instead of four. The weights
-   are currently defensible, not measured.
-4. **A dedicated OCR stage** for scans (Document AI / Textract) with **word-level confidence
-   scores**. Gemini's OCR is strong but returns no per-character certainty — a real OCR engine
-   does, and that's a strictly better uncertainty signal than anything computed here.
-5. **The second provider.** There's already an `LLMProvider` seam and a `provider` column;
-   implementing Groq behind it and putting a head-to-head over the same four documents in this
-   README would turn "I thought about evals" into an actual eval.
-6. **Span grounding** — have the model return the source region per field, and highlight it on
-   the document when you focus the input. The natural next step for the two-pane view.
-7. **Vendor templates.** Once a vendor's layout is corrected, prime the next invoice from that
-   vendor with the corrected prior. Cheaper and more accurate at volume than re-reading from
-   scratch every time.
-8. **Recorded-fixture tests for the pipeline end to end.** The pure functions are well covered;
-   the Gemini integration is only covered by a scripted fake.
-
-## What I deliberately skipped
-
-Auth, deployment, multi-user, websocket progress, PDF form fields, table-structure ML, exhaustive
-locale handling, and a job queue. Each was one honest sentence here instead of an hour of code
-that wouldn't have changed what a reviewer sees.
-
----
-
-## Layout
+## Project Structure
 
 ```
-apps/api            Express + TS. Extraction pipeline, routes, Drizzle schema.
-  src/extraction/   classify · prepare · prompt · repair · consensus · checks · confidence
-  src/llm/          provider interface + Gemini implementation
-apps/web            React + TS + Tailwind. Upload, list, two-pane review.
-packages/shared     The zod schema. One definition → TS types, runtime validation,
-                    and Gemini's responseSchema.
-samples/generate    Scripts that produce the four invoices from one fixture.
-samples/input       The four generated documents.
-samples/output      Committed extraction results.
+apps/
+  api/              Express API, extraction pipeline, database access
+  web/              React review interface
+packages/
+  shared/           Invoice schema, flag types, API types
+samples/
+  generate/         Scripts that produce the sample invoices
+  input/            The four sample documents
+  output/           Committed extraction results
 ```
 
-`ARCHITECTURE.md` has the fuller design write-up, including the parts that were reasoned about
-and then not built.
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the system design, extraction pipeline, data model
+and the reasoning behind the main technical decisions.

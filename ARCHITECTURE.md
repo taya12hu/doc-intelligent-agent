@@ -1,624 +1,382 @@
 # Document Intelligence Agent — Architecture
 
-> Messy vendor invoices → validated structured records a human can review and correct.
-> Task for Kautilya PE (Full‑Stack + AI Engineer). Target effort: 4–6 focused hours.
+## 1. Overview
 
-**Stack locked:** Gemini (LLM, primary) · Drizzle (ORM) · Supabase Postgres + Storage · Express + TS · React + Vite + TS + Tailwind.
+The Document Intelligence Agent extracts structured invoice data from PDF and Excel documents
+using a large language model, validates the result, and presents it for human review.
 
-> ### This is the DESIGN doc, written before the build. `README.md` is the as-built.
->
-> It is kept unedited apart from this box, because what changed on contact with
-> reality is itself worth reading. The deltas that matter:
->
-> | Planned here | What shipped | Why |
-> |---|---|---|
-> | §5.7 escalation triggered *post-hoc* by low confidence, low legibility or ≥2 error flags | Escalation is rung 3 of the repair ladder: it fires when the model cannot produce a **valid** record, not when it produces a low-confidence one. | Post-hoc escalation is a different feature — "try harder on a hard document" — and costs a whole extra extraction run. Against a 20-request **daily** free-tier cap that is not affordable, and it would not have helped: on the degraded scan the model was not failing to produce output, it was correctly declining to guess. Escalating would have pressured a second model into guessing instead. |
-> | 3 self-consistency passes | Default 2, 3 supported | Same daily quota. §5.6's reasoning is unchanged; only the default moved. |
-> | `gemini-3.7-flash` / `gemini-2.5-pro` | `gemini-3.6-flash` / `gemini-3.5-flash` | 3.7 is routinely 503; 2.5-pro returns 404 "no longer available to new users". Pro-class models are quota-blocked without billing, so escalation goes to a different flash generation — still a different model with different failure modes. |
-> | Passes run concurrently | Sequential | 5 req/min means concurrent passes all fail together. Sequential also degrades better: pass 0 is canonical, so exhausting quota partway still leaves a usable record. |
-> | `meta.illegibleFields` only | Also `meta.invoiceDateAsPrinted` | Added mid-build: once the model normalises `08/03/2025` to ISO, the ambiguity is undetectable. Keeping the printed form is what makes the `ambiguous_date` flag possible at all. |
->
-> Everything else — the two-stage reconciliation, the repair ladder, consensus,
-> computed confidence, the two-pane review screen — shipped as described.
+Documents vary widely in layout, labelling and quality, and language models do not reliably
+produce correct output from them. The system is therefore built on the assumption that any
+extraction may be wrong: model output is validated against a schema, checked against independent
+arithmetic rules, and any field that cannot be confirmed is flagged rather than silently
+accepted. A reviewer sees the original document alongside the extracted record and can correct
+it.
 
----
+## 2. Architecture
 
-## 1. What we're actually being graded on
+```
+                  ┌──────────────────────────────────────────────┐
+   React UI  ───► │  Express API                                 │
+                  │                                              │
+                  │  1. validate upload, detect file type        │
+                  │  2. store original file  ──► Supabase Storage│
+                  │  3. insert document row                      │
+                  │  4. run extraction pipeline:                 │
+                  │       prepare input                          │
+                  │       Gemini structured extraction (N passes)│
+                  │       Zod validation + repair                │
+                  │       consensus across passes                │
+                  │       deterministic checks                   │
+                  │       confidence + status                    │
+                  │  5. persist extraction + line items          │
+                  └───────────────────┬──────────────────────────┘
+                                      │ Drizzle
+                              ┌───────▼────────┐
+                              │   Supabase     │
+                              │   Postgres     │
+                              └────────────────┘
+```
 
-The brief says it outright, so optimize for it:
-
-1. **Ship end‑to‑end** — upload → extract → review → correct, working.
-2. **Handling LLM unreliability** — validation, retries, repair, confidence signaling. Not trusting raw output.
-3. **Data modeling + API design.**
-4. **Frontend usability on messy data**, not the happy path.
-5. **Written judgment** — README trade‑offs matter as much as code.
-
-**What we deliberately do NOT build:** auth, deployment, multi‑user, job queues, websockets/SSE, visual polish, exotic formats. Each is one honest sentence in the README instead of an hour of code.
-
-The one thing that must be right: **the system knows when it's wrong and says so.** A confidently wrong extraction is a failure. A flagged uncertain extraction is a success.
-
----
-
-## 2. Why Gemini, and what that buys us
-
-The crux of this task is the deliberately degraded scan. Document understanding is Gemini's strongest capability, and three of its properties shape the whole design:
-
-| Capability | Consequence |
+| Component | Responsibility |
 |---|---|
-| **Native PDF input** — send raw PDF bytes, 50 MB / 1000 pages, ~258 tokens/page | **No rasterization stage at all.** No pdfjs→PNG render, no DPI tuning, no per‑request image cap. Text PDFs and scanned PDFs go down the *same* code path. |
-| **Structured output (`responseSchema`) works alongside multimodal input** | One call: PDF in, schema‑shaped JSON out. No two‑stage transcribe‑then‑structure workaround. |
-| Strong OCR on low‑quality scans | The hard sample gets the best available reader, which is the honest choice when the hard sample *is* the task. |
+| `apps/api` | Express API, extraction pipeline, database access |
+| `apps/web` | React review interface |
+| `packages/shared` | Invoice schema, flag types, API DTOs, money parsing |
+| `samples/generate` | Scripts that produce the sample invoices from a fixture |
 
-Google's own guidance for document input is *"rotate pages to the correct orientation"* and *"avoid blurry pages."* Sample #3 deliberately violates both — worth naming in the README, because it frames the scan as an adversarial case rather than an accident.
+`packages/shared` holds a single Zod definition of the invoice record, which produces the
+TypeScript types used by both applications, the runtime validator, and the response schema sent
+to the model.
 
-> ⚠️ **Verify in step 0.** Gemini model IDs move fast. Call `ListModels` and confirm the IDs below exist, and confirm `responseSchema` + PDF input compose in one call before building on it. Keep IDs in env (`GEMINI_MODEL`, `GEMINI_ESCALATION_MODEL`) so a swap is config, not code.
+## 3. Backend
 
-### Model roles
+Express 5 with TypeScript. Route handlers delegate to a repository layer for database access and
+to the extraction pipeline for processing; they contain no SQL.
 
-| Role | Model | Why |
+### Upload flow
+
+1. Uploaded bytes are checked against a size limit and their magic bytes. The declared MIME type
+   and file extension are not trusted; the extension is used only to distinguish an `.xlsx`
+   workbook from other ZIP archives.
+2. The file is classified as `pdf_text`, `pdf_scanned` or `xlsx`. For PDFs the embedded text
+   layer is extracted with `pdfjs-dist` and measured — fewer than roughly 50 characters per page
+   indicates a scan.
+3. Classification runs before storage, so an unreadable file does not leave an orphaned object in
+   the bucket.
+4. The original file is uploaded to a private Supabase Storage bucket and a `documents` row is
+   created.
+5. The extraction pipeline runs and the result is persisted.
+
+Extraction runs synchronously within the upload request. The `pending` and `processing` statuses
+and the document timestamps are modelled so that moving to a background worker later would not
+require a schema change.
+
+### Persistence
+
+Drizzle ORM over `postgres.js`. Monetary columns use Postgres `numeric` and are read back as
+JavaScript numbers, so the API, the validation checks and the frontend all handle the same type.
+The database client detects Supabase's transaction pooler (port 6543) and disables prepared
+statements, which that pooler does not support.
+
+## 4. LLM Extraction
+
+### Provider
+
+Gemini is the primary provider, accessed through an `LLMProvider` interface exposing a single
+`extract` method. Everything above that interface — repair, consensus, validation, confidence —
+is provider-agnostic.
+
+Gemini supports native PDF input and structured output in the same request, so text PDFs and
+scanned PDFs use the same code path with no rasterisation step.
+
+### Input preparation
+
+| File type | Handling |
+|---|---|
+| `pdf_text`, `pdf_scanned` | Raw PDF bytes sent inline, unmodified |
+| `xlsx` | Parsed with SheetJS into Markdown tables preserving column letters, row numbers and merged ranges |
+
+PDFs are passed through untouched because the model reads the page as laid out; extracting text
+first flattens the table structure that gives an invoice its meaning. Spreadsheets cannot be read
+directly, and the Markdown rendering keeps cell addresses because position carries meaning —
+data may not start at A1, and a total may sit several rows below the table it summarises.
+
+### Structured output
+
+The request sets `responseMimeType: application/json` and a `responseSchema` derived from the Zod
+schema. Gemini accepts an OpenAPI 3.0 subset rather than JSON Schema — uppercase type names,
+`nullable: true` instead of type unions, no `$ref`, and a Gemini-specific `propertyOrdering`
+field — so the conversion is handled by a small purpose-built function.
+
+Every field is nullable and none are optional, which forces the model to emit an explicit `null`
+for a value it did not find rather than omitting the key. Per-field descriptions live on the
+schema rather than in the prompt.
+
+The model returns an envelope with two parts:
+
+- `invoice` — vendor, invoice number, date, currency, line items, subtotal, discount, tax and
+  grand total.
+- `meta` — field paths the model could not read, an overall legibility score, the invoice date
+  exactly as printed, and free-text notes.
+
+`meta` is stored with the extraction and drives the flagging logic, but is never written into the
+record. `illegibleFields` lets the model state that it could not read a value instead of guessing
+at it, and `invoiceDateAsPrinted` preserves the original date string, which is what keeps
+`MM/DD` versus `DD/MM` ambiguity detectable after normalisation. Field paths returned by the
+model are normalised before use, as the model may prefix them with the envelope key.
+
+### Validation and repair
+
+Structured output constrains the shape of a response, not its correctness, and does not always
+constrain the shape reliably. Each pass runs through an escalating sequence:
+
+1. **Local repair** — strip Markdown fences, extract the first balanced object, remove trailing
+   commas, close JSON truncated at the token limit. Truncation discards the incomplete trailing
+   element rather than reconstructing it.
+2. **Type coercion** — convert money-like strings to numbers, handling thousands separators
+   (including Indian grouping), European decimal commas, currency symbols, accounting parentheses
+   and unit suffixes. Values that cannot be coerced become `null`.
+3. **Repair request** — send the model its own output plus the validation errors and ask for a
+   correction, without repeating the extraction instructions.
+4. **Escalation** — retry once on a second model with a higher token limit.
+5. **Failure** — persist the raw output, mark the record `failed`, flag every field.
+
+Each pass is capped at four model calls, and every step is recorded in a repair log stored with
+the extraction.
+
+Transport failures — rate limits, service errors, safety blocks — are handled separately from
+invalid output. They retry with backoff inside the provider, honouring the retry delay returned
+by the API, and do not consume repair attempts.
+
+### Self-consistency
+
+Extraction runs `EXTRACTION_SAMPLES` times (default 2) at different temperatures, the first at
+temperature 0. Results are compared field by field:
+
+| Agreement | Result |
+|---|---|
+| All passes agree | Value accepted, no flag |
+| Majority agrees | Majority value, warning flag |
+| All passes differ | Temperature-0 value, error flag |
+
+Comparison ignores cosmetic string differences. Line items are matched by position among the
+passes producing the most common row count; a disagreement about the number of rows flags the
+line-item list as a whole rather than aligning rows that may not correspond. Passes run
+sequentially, so a partially exhausted API quota still yields a usable record from fewer passes,
+with the reduced count recorded on the extraction.
+
+### Deterministic checks
+
+These run after consensus and do not involve the model.
+
+| Check | Description |
+|---|---|
+| Reconciliation, stage 1 | Sum of line totals against the stated subtotal |
+| Reconciliation, stage 2 | Subtotal minus discount plus tax against the grand total |
+| Row arithmetic | Quantity times unit price against the row total |
+| Missing fields | Nulls in vendor, invoice number, date or grand total |
+| Illegible source | Fields the model reported as unreadable |
+| Ambiguous date | Printed dates where both components could be the month |
+| Implausible values | Negative totals, unreasonable quantities, out-of-range dates, order-of-magnitude mismatches |
+
+Subtotal, discount and tax are modelled as explicit fields rather than inferred. A single check
+comparing line items directly against the grand total would report a mismatch on any invoice
+carrying tax, which is a false positive on a correct extraction.
+
+When a line total is blank but quantity and unit price are present, the value is derived for
+reconciliation purposes only. The record keeps the null, and the flag includes the derived figure
+as a suggestion to confirm.
+
+### Confidence and status
+
+Confidence starts at 1.0, less 0.15 per error flag, 0.05 per warning, and 0.1 if the repair loop
+ran. The result is multiplied by the model's reported legibility, so a poor scan caps the score
+regardless of the other checks; legibility can only lower it, never raise it.
+
+| Status | Condition |
+|---|---|
+| `extracted` | No flags |
+| `needs_review` | One or more flags, record usable |
+| `failed` | No valid object after repair and escalation, or three or more error flags on required fields |
+
+## 5. Data Model
+
+### `documents`
+
+One row per uploaded file.
+
+| Column | Notes |
+|---|---|
+| `id` | UUID primary key |
+| `filename`, `mime_type`, `byte_size` | Upload metadata |
+| `file_kind` | `pdf_text`, `pdf_scanned` or `xlsx`, detected from the file |
+| `storage_path` | Object key in the Supabase Storage bucket |
+| `status` | `pending`, `processing`, `extracted`, `needs_review`, `failed` |
+| `created_at`, `updated_at` | Timestamps |
+
+### `extractions`
+
+One row per extraction attempt, referencing a document. Columns fall into three groups:
+
+- **Provenance** — provider, model, escalation model, pass and attempt counts, latency, token
+  usage, the repair log, and a JSON column holding the `meta` envelope, each pass's invoice, the
+  agreement map and any raw output from a failed run.
+- **Verdict** — status, confidence and the flag list.
+- **The record** — vendor name, invoice number, invoice date, currency, subtotal, discount total,
+  tax total and grand total, all directly editable by a reviewer.
+
+There is no separate table for the reviewed record. The extraction is the record, and human
+corrections update it in place, with an edit trail appended to the JSON provenance column.
+
+Re-running extraction inserts a new row and sets `is_current = false` on the previous one,
+preserving earlier results including any corrections made to them. An index on
+`(document_id, is_current)` supports the common lookup.
+
+### `line_items`
+
+One row per invoice line, referencing an extraction.
+
+| Column | Notes |
+|---|---|
+| `id` | UUID primary key |
+| `extraction_id` | Foreign key, cascade delete |
+| `position` | Document order |
+| `description`, `quantity`, `unit_price`, `line_total` | Row values |
+| `flags` | Flags scoped to this row |
+| `is_edited` | Set when a human has changed the row |
+
+Line items are stored separately rather than as JSON so individual rows can be updated, added or
+deleted, and so the server can re-run arithmetic checks on the result. Monetary columns use
+`numeric`, never floating point. Flag lists are stored as JSONB, as they are display metadata and
+are not queried relationally.
+
+## 6. API
+
+All routes are under `/api`. There is no authentication.
+
+| Method | Route | Purpose |
 |---|---|---|
-| **Primary extraction** | `gemini-3.7-flash` (alt: `gemini-3.6-flash`) | Fast, cheap, strong multimodal. Handles all four documents. |
-| **Escalation** | `gemini-2.5-pro` / `gemini-3.1-pro-preview` | Retried **once** when the primary comes back low‑confidence or the repair loop fired. ~20 lines of code, real production pattern. |
-
-SDK: `@google/genai`. Inline base64 for our sample‑sized files; the Files API is the path for anything larger or reused across calls (noted, not built).
-
-### Provider interface — cheap insurance
-
-Put a thin seam between the pipeline and the SDK:
-
-```ts
-interface LLMProvider {
-  name: string;
-  extract(input: ExtractionInput, opts: { temperature: number; model: string })
-    : Promise<{ raw: string; parsed: unknown; usage: Usage; latencyMs: number }>;
-}
-```
-
-15 minutes. Two payoffs: it's the escape hatch if the Gemini free tier rate‑limits us mid‑build, and if the core finishes early we implement a second provider (Groq), run both across the 4 samples, and put the comparison in the README. **That comparison is an eval** — and the job description explicitly asks for evals. Stretch goal only; never before the core works.
-
----
-
-## 3. High‑level flow
-
-```
-┌────────────┐   POST /api/documents   ┌──────────────────────────────────────────┐
-│  React UI  │ ──────────────────────▶ │  Express API (TypeScript)                │
-│            │                         │                                          │
-│  · upload  │                         │  1. validate + store file → Supabase     │
-│  · list    │                         │     Storage; insert documents row        │
-│  · review  │ ◀────────────────────── │  2. run extraction pipeline (SYNC)       │
-│  · correct │      full record        │                                          │
-└────────────┘                         │   ┌──────────────────────────────────┐   │
-                                       │   │ classify → pdf_text | pdf_scanned│   │
-                                       │   │            | xlsx                │   │
-                                       │   ├──────────────────────────────────┤   │
-                                       │   │ prepare input                    │   │
-                                       │   │  pdf  → raw bytes (passthrough)  │   │
-                                       │   │  xlsx → SheetJS → markdown       │   │
-                                       │   ├──────────────────────────────────┤   │
-                                       │   │ EXTRACT: Gemini + responseSchema │   │
-                                       │   │  ×3 samples (self-consistency)   │   │
-                                       │   ├──────────────────────────────────┤   │
-                                       │   │ zod validate → repair loop       │   │
-                                       │   │ → escalate to Pro if shaky       │   │
-                                       │   ├──────────────────────────────────┤   │
-                                       │   │ deterministic checks → flags     │   │
-                                       │   │ confidence + status              │   │
-                                       │   └──────────────────────────────────┘   │
-                                       │  3. persist extraction + line_items      │
-                                       └────────────────────┬─────────────────────┘
-                                                            │  Drizzle
-                                                     ┌──────▼───────┐
-                                                     │   Postgres   │
-                                                     │  (Supabase)  │
-                                                     └──────────────┘
-```
-
-**Extraction is synchronous** on the upload request. Rationale: 4 files, single user, no deploy, responses land in a few seconds. A queue is the correct production answer and it's #1 on the "more time" list — but at n=4 it's ceremony that costs an hour and adds zero grading signal. We still model `status` and timestamps *as if* async, so the design story holds.
-
----
-
-## 4. Repo layout
-
-npm workspaces monorepo:
-
-```
-/
-├── apps/
-│   ├── api/
-│   │   ├── src/
-│   │   │   ├── index.ts               # express bootstrap
-│   │   │   ├── routes/                # documents, extractions, line-items
-│   │   │   ├── db/
-│   │   │   │   ├── schema.ts          # drizzle schema (source of truth)
-│   │   │   │   ├── client.ts          # postgres.js + drizzle
-│   │   │   │   └── repo.ts            # query helpers
-│   │   │   ├── storage/               # supabase storage wrapper
-│   │   │   ├── llm/
-│   │   │   │   ├── provider.ts        # LLMProvider interface
-│   │   │   │   ├── gemini.ts          # primary impl
-│   │   │   │   └── groq.ts            # optional 2nd impl (stretch)
-│   │   │   ├── extraction/
-│   │   │   │   ├── index.ts           # runExtraction() orchestrator
-│   │   │   │   ├── classify.ts
-│   │   │   │   ├── prepare.ts         # pdf passthrough / xlsx → markdown
-│   │   │   │   ├── prompt.ts
-│   │   │   │   ├── repair.ts          # local repair + repair loop
-│   │   │   │   ├── consensus.ts       # self-consistency across samples
-│   │   │   │   ├── checks.ts          # arithmetic, date, missing → flags
-│   │   │   │   └── confidence.ts
-│   │   │   └── lib/                   # money/date coercion, errors
-│   │   └── drizzle.config.ts
-│   └── web/
-│       └── src/
-│           ├── routes/                # Upload, List, RecordDetail
-│           ├── components/            # FlagChip, StatusPill, LineItemGrid,
-│           │                          # SourceViewer, ConfidenceBar, ExtractionLog
-│           └── api/                   # typed fetch + TanStack Query hooks
-├── packages/
-│   └── shared/src/
-│       ├── invoice.ts                 # zod schema  ← single source of truth
-│       ├── flags.ts                   # FieldFlag types
-│       └── responseSchema.ts          # zod → Gemini responseSchema
-├── samples/
-│   ├── generate/                      # scripts that produce the 4 files
-│   ├── input/                         # the 4 invoices (committed)
-│   └── output/                        # extraction JSON per file (committed)
-├── ARCHITECTURE.md
-└── README.md
-```
-
-`packages/shared` is load‑bearing: the invoice schema is written **once** in zod and produces (a) the TS types both apps use, (b) the runtime validator, (c) the `responseSchema` handed to Gemini.
-
----
-
-## 5. The extraction pipeline
-
-### 5.1 Canonical schema — `packages/shared/src/invoice.ts`
-
-```ts
-export const LineItem = z.object({
-  description: z.string(),
-  quantity:    z.number().nullable(),
-  unitPrice:   z.number().nullable(),
-  lineTotal:   z.number().nullable(),
-});
-
-export const Invoice = z.object({
-  vendorName:    z.string().nullable(),
-  invoiceNumber: z.string().nullable(),
-  invoiceDate:   z.string().nullable(),   // model emits ISO; we re-normalize
-  currency:      z.string().nullable(),   // ISO-4217; beyond brief, cheap, useful
-  lineItems:     z.array(LineItem),
-
-  // the adjustment band between line items and the total
-  subtotal:      z.number().nullable(),
-  discountTotal: z.number().nullable(),   // positive magnitude, subtracted
-  taxTotal:      z.number().nullable(),
-
-  grandTotal:    z.number().nullable(),
-});
-```
-
-**Choices:**
-
-- **Every field nullable, nothing optional.** Removes the ambiguity between "didn't find it" and "forgot to emit it". Explicit `null` is a signal we can flag; a missing key is noise.
-- **Numbers are numbers.** Prompt says strip `$ , ₹ Rs.`. When the model returns `"1,234.50"` anyway, a coercion preprocessor repairs it before zod. If coercion fails → `unparseable` flag, not a crash.
-- **Date as string, normalized separately.** Invoices say `03/04/2025`, `14‑Mar‑2025`, `2025‑03‑04`. Ask for ISO, then normalize with dayjs + custom parsers. If `MM/DD` vs `DD/MM` is genuinely ambiguous, pick one **and flag it**, keeping the raw string in `raw.observed`.
-- **`currency` added beyond the brief** — one extra field, lets the arithmetic check avoid mixing units and tells the reviewer "this one's in INR".
-- **`subtotal` / `discountTotal` / `taxTotal` added beyond the brief.** Without them, any invoice with a tax or discount row makes `Σ lineTotal ≠ grandTotal`, and our single strongest check fires a false positive on a perfectly correct extraction — which would train the reviewer to ignore the flag. Three nullable numbers turn one brittle check into a **two-stage reconciliation** (§5.8) that is both stricter and quieter. The alternative — letting tax and discount masquerade as line items with negative totals — makes the sum work but corrupts the line‑item table the human has to review. Modeling the adjustment band explicitly is the honest choice.
-
-### 5.2 The response envelope
-
-The model returns more than the canonical record. Wrap it:
-
-```ts
-const ExtractionEnvelope = z.object({
-  invoice: Invoice,
-  meta: z.object({
-    illegibleFields: z.array(z.string()),  // ["grandTotal", "lineItems[2].unitPrice"]
-    legibility:      z.number(),           // 0–1, model's read on source quality
-    notes:           z.string(),           // free text, e.g. "discount row present"
-  }),
-});
-```
-
-`invoice` becomes the persisted record. `meta` goes into `extractions.raw` and feeds the flagging logic — **it never contaminates the canonical data.**
-
-`illegibleFields` is the key idea, and it replaces the `[?]`‑marker machinery a two‑stage pipeline would have needed. Instead of the model silently guessing at a smudged number, it tells us *which fields it couldn't read*, we emit `null` for them, and that becomes a flag. **Uncertainty survives the pipeline instead of getting laundered into a hallucination.**
-
-### 5.3 Classify
-
-MIME + extension + magic bytes → `pdf_text | pdf_scanned | xlsx`.
-
-For PDFs we still run `pdfjs-dist` text extraction — **not to feed the model**, but to classify: < ~50 chars/page → `pdf_scanned`. Stored on the document row and shown in the UI as a badge, which proves the system detected the scan itself rather than being told. Cheap, and it lets the prompt adapt (§5.5).
-
-### 5.4 Prepare input
-
-| Kind | Handling |
-|---|---|
-| `pdf_text`, `pdf_scanned` | **Raw PDF bytes, inline base64, straight to Gemini.** No preprocessing. This is the whole payoff of the Gemini choice. |
-| `xlsx` | SheetJS → for each sheet, a **markdown table with cell addresses preserved** (`A1`, `B7`), empty cells as `∅`. Addresses let the model reason about "the total sits four rows below the table" — exactly sample #4's trick. |
-
-### 5.5 Extraction call
-
-- **System prompt**: role, exact field definitions, normalization rules, and the hard rule:
-  > *"If a value is not present, or you cannot read it clearly, output `null` for it and add its field path to `meta.illegibleFields`. Do not infer, do not compute, do not guess. A `null` is correct; a wrong number is a failure."*
-- **`responseSchema`** derived from the zod envelope, with `responseMimeType: 'application/json'`.
-- `temperature: 0` for the primary sample. Generous `maxOutputTokens` (long line‑item lists — see §5.7 for what happens when we hit the ceiling anyway).
-- **Prompt adapts on `pdf_scanned`**: adds an explicit line that the source is a low‑quality scan, that partial illegibility is expected, and that reporting it is the correct behaviour. One conditional string, meaningful accuracy difference.
-
-### 5.6 Self‑consistency
-
-Run the extraction **3 times**: one at `temperature 0`, two at `temperature 0.4`. Then compare **field by field**:
-
-| Agreement across 3 runs | Action |
-|---|---|
-| All 3 identical | high confidence, no flag |
-| 2 of 3 agree | take the majority value, flag `low_agreement` (warn) |
-| All 3 differ | take the temp‑0 value, flag `disagreement` (error) — this field is a coin flip |
-
-Line items are matched by position + fuzzy description, then compared exactly on numbers.
-
-Why it's worth 3× the calls: **it's an empirical uncertainty measure, not the model's opinion of itself.** Self‑reported confidence is weakly calibrated at best; disagreement across independent samples genuinely tracks the model being unsure — and on the degraded scan it will light up precisely on the fields we deliberately made hard. That is a demonstrable result, not a claim.
-
-Behind `EXTRACTION_SAMPLES=3` so it can be dialled to 1 if free‑tier rate limits bite. Note the RPM ceiling in the README as a scaling consideration.
-
-### 5.7 Validate + repair loop
-
-`responseSchema` gives us a **shape** guarantee, not a **correctness** one — and not even shape, reliably. Handle failure in escalating order, **cheapest fix first**:
-
-```
-0. Local repair (no API call):
-     strip markdown fences, extract first balanced {...},
-     close truncated JSON, fix trailing commas,
-     coerce "1,23,456.00" → 123456, "3 Nos" → 3, "$1,200" → 1200
-   → re-parse
-
-1. zod.safeParse
-     ok   → continue
-     fail → attempt 2
-
-2. Repair call: send the model its own output + the zod error
-     "Your output failed validation: <zod error path + message>.
-      Return corrected JSON matching the schema. Change nothing else."
-
-3. Fail again, OR finishReason === 'MAX_TOKENS'
-   → escalate: retry once on the Pro model with a trimmed prompt
-     and a higher token ceiling
-
-4. Fail again → status = 'failed'. Persist the raw model text in
-   extractions.raw, flag every field, return 201 with the failure.
-   The UI shows "extraction failed — here's the raw output" rather
-   than a blank record or a lie.
-```
-
-Hard cap: **4 model calls per sample.** Every attempt appended to `repair_log` (attempt no, finishReason, error, action taken) and surfaced in the UI behind a "Show extraction log" disclosure. That's grading criterion #2 made *visible* rather than asserted.
-
-**Known Gemini failure modes this specifically catches:**
-- `finishReason: MAX_TOKENS` → JSON truncated mid‑array on a long invoice. Local repair closes the structure, we flag the truncation, and escalation retries with more headroom.
-- Schema‑valid but semantically wrong — caught downstream by §5.8, not here.
-- Safety/recitation blocks returning empty candidates → treated as a transport failure, retried with backoff.
-
-Separately, a transport layer with exponential backoff on 429/5xx. **Don't conflate "network flaked" with "model was wrong"** — they need different responses and they mean different things in the log.
-
-**Escalation trigger** (the Flash→Pro path, ~20 lines): fire when the repair loop ran, or `meta.legibility < 0.5`, or ≥2 error‑severity flags after §5.8. One retry, recorded in `repair_log`. Real production pattern, cheap, and a good interview talking point.
-
-### 5.8 Deterministic checks → flags
-
-Nothing here calls a model. Pure functions, unit‑testable, and the strongest hallucination catch we have.
-
-```ts
-type FieldFlag = {
-  field: string;      // "grandTotal" | "lineItems[2].unitPrice"
-  reason: 'missing' | 'unparseable' | 'illegible_source' | 'math_mismatch'
-        | 'row_math_mismatch' | 'ambiguous_date' | 'low_agreement'
-        | 'disagreement' | 'repair_required' | 'truncated'
-        | 'low_legibility' | 'implausible_value';
-  severity: 'warn' | 'error';
-  detail?: string;    // human-readable: "Σ lines = 1,240.00, stated = 1,245.00"
-};
-```
-
-| Check | Rule |
-|---|---|
-| **Reconciliation, stage 1** | `Σ lineTotal` vs `subtotal` (falling back to `grandTotal` when `subtotal` is null), tolerance ±0.02 → `math_mismatch` on `subtotal`. |
-| **Reconciliation, stage 2** | `subtotal − discountTotal + taxTotal` vs `grandTotal`, same tolerance → `math_mismatch` on `grandTotal`. Nulls in the adjustment band are treated as 0, but *only* if stage 2 then balances; if it doesn't, the null adjustment is itself flagged `missing` — an unexplained delta means we failed to read a row that exists. |
-| **Row arithmetic** | `quantity × unitPrice ≈ lineTotal` per row → `row_math_mismatch` on that row. |
-| **Missing required** | any `null` in the required set → `missing`. |
-| **Illegible source** | field listed in `meta.illegibleFields` → `illegible_source`. |
-| **Ambiguous date** | `MM/DD` vs `DD/MM` where both ≤ 12 → `ambiguous_date`. |
-| **Implausible** | negative total, qty > 100k, date in the future or before 2000, grand total 100× the line sum → `implausible_value`. Cheap sanity net. |
-| **Agreement** | from §5.6. |
-| **Repair / truncation** | repair loop fired, or `MAX_TOKENS` hit → global `warn`. |
-
-### 5.9 Confidence + status
-
-Confidence is **computed, never taken from the model**:
-
-```
-start at 1.0
-  − 0.15 per error flag
-  − 0.05 per warn flag
-  × meta.legibility        (scanned path only)
-  − 0.10 if repair loop fired
-clamp 0…1
-```
-
-Status:
-
-```
-extracted     → 0 flags and all arithmetic checks pass
-needs_review  → any warn flag, or an error flag where we still got a usable object
-failed        → no valid object after the repair loop and escalation,
-                OR ≥3 error flags on required fields (we have an object
-                but shouldn't trust it)
-```
-
-The degraded scan (#3) is *expected* to land in `needs_review`/`failed` with targeted per‑field flags. **We do not tune the prompt until it goes green** — the brief asks us to flag it rather than silently return wrong data, and doing that honestly is the entire point.
-
----
-
-## 6. Data model (Drizzle + Supabase Postgres)
-
-Three tables. **Line items normalized, not JSONB** — the brief grades data modeling, and the UI edits rows individually with server‑side arithmetic re‑checks on save.
-
-`apps/api/src/db/schema.ts`:
-
-```ts
-export const documents = pgTable('documents', {
-  id:          uuid('id').primaryKey().defaultRandom(),
-  filename:    text('filename').notNull(),
-  mimeType:    text('mime_type').notNull(),
-  fileKind:    text('file_kind', { enum: ['pdf_text','pdf_scanned','xlsx'] }).notNull(),
-  storagePath: text('storage_path').notNull(),          // Supabase Storage object key
-  byteSize:    integer('byte_size').notNull(),
-  status:      text('status', { enum: ['pending','processing','extracted','needs_review','failed'] })
-                 .notNull().default('pending'),
-  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, t => ({ statusIdx: index().on(t.status) }));
-
-export const extractions = pgTable('extractions', {
-  id:            uuid('id').primaryKey().defaultRandom(),
-  documentId:    uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
-
-  // provenance
-  provider:      text('provider').notNull(),            // 'gemini' | 'groq'
-  model:         text('model').notNull(),
-  escalatedTo:   text('escalated_to'),                  // Pro model, if we escalated
-  samples:       integer('samples').notNull().default(1),
-  attempts:      integer('attempts').notNull().default(1),
-  latencyMs:     integer('latency_ms'),
-  tokensIn:      integer('tokens_in'),
-  tokensOut:     integer('tokens_out'),
-  repairLog:     jsonb('repair_log').$type<RepairStep[]>().notNull().default([]),
-  raw:           jsonb('raw'),                          // meta envelope, all samples, failure text
-
-  // verdict
-  status:        text('status').notNull(),
-  confidence:    numeric('confidence', { precision: 3, scale: 2 }),
-  flags:         jsonb('flags').$type<FieldFlag[]>().notNull().default([]),
-
-  // the canonical, human-editable record
-  vendorName:    text('vendor_name'),
-  invoiceNumber: text('invoice_number'),
-  invoiceDate:   date('invoice_date'),
-  currency:      char('currency', { length: 3 }),
-  subtotal:      numeric('subtotal',       { precision: 14, scale: 2 }),
-  discountTotal: numeric('discount_total', { precision: 14, scale: 2 }),
-  taxTotal:      numeric('tax_total',      { precision: 14, scale: 2 }),
-  grandTotal:    numeric('grand_total',    { precision: 14, scale: 2 }),
-
-  isCurrent:     boolean('is_current').notNull().default(true),
-  reviewedAt:    timestamp('reviewed_at', { withTimezone: true }),
-  createdAt:     timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt:     timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const lineItems = pgTable('line_items', {
-  id:            uuid('id').primaryKey().defaultRandom(),
-  extractionId:  uuid('extraction_id').notNull().references(() => extractions.id, { onDelete: 'cascade' }),
-  position:      integer('position').notNull(),
-  description:   text('description'),
-  quantity:      numeric('quantity',   { precision: 14, scale: 4 }),
-  unitPrice:     numeric('unit_price', { precision: 14, scale: 4 }),
-  lineTotal:     numeric('line_total', { precision: 14, scale: 2 }),
-  flags:         jsonb('flags').$type<FieldFlag[]>().notNull().default([]),
-  isEdited:      boolean('is_edited').notNull().default(false),
-});
-```
-
-**Trade‑offs to write up:**
-
-- **`extractions` holds the editable canonical values** rather than a separate `records` table. One less join, and "the extraction *is* the record, humans just correct it" is the honest mental model. An edit sets `isEdited` and appends to `raw.edits` (field, old, new, timestamp). A dedicated `field_edits` audit table is the more‑time answer.
-- **Re‑extraction inserts a new `extractions` row**, sets the previous `isCurrent = false`. Free history, no versioning machinery. Partial index `where is_current` keeps the hot query fast.
-- **`provider` column** even though we ship one provider — it costs a column and makes the eval comparison (§2) a query instead of a refactor.
-- **`numeric`, never `float`.** It's money.
-- **`flags` as JSONB** — display metadata, never queried relationally. Normalizing it would be over‑engineering, and I'd rather say that out loud than build it.
-- **`raw` as JSONB** holds the `meta` envelope and all 3 samples. Makes any run reproducible and debuggable after the fact — worth far more than the storage.
-- **`isEdited` on line items** so the UI distinguishes human‑corrected from model output. Useful trust signal, one boolean.
-
-**Connection:** postgres.js + `drizzle-orm/postgres-js`, against Supabase's **session pooler / direct connection** (long‑running Express server, not serverless). If using the transaction pooler (`:6543`), set `prepare: false` on postgres.js or prepared statements break. Migrations via `drizzle-kit generate` + `migrate`, SQL committed under `apps/api/drizzle/`.
-
-**Storage:** Supabase Storage bucket `invoices`, private, accessed server‑side with the **service role key** (never shipped to the browser). The UI reaches files through our own `GET /api/documents/:id/file`, which issues a short‑lived signed URL.
-
----
-
-## 7. API
-
-REST, JSON, under `/api`. No auth (out of scope — stated in README).
-
-| Method | Path | Purpose |
+| `POST` | `/api/documents` | Upload a file, run extraction, return the full record |
+| `GET` | `/api/documents` | List records for the review queue |
+| `GET` | `/api/documents/:id` | Full record: document, current extraction, line items |
+| `GET` | `/api/documents/:id/file` | Redirect to a short-lived signed URL for the original file |
+| `POST` | `/api/documents/:id/reextract` | Re-run extraction, superseding the previous result |
+| `PATCH` | `/api/extractions/:id` | Correct header or total fields |
+| `POST` | `/api/extractions/:id/line-items` | Add a line item |
+| `POST` | `/api/extractions/:id/review` | Mark the record reviewed |
+| `PATCH` | `/api/line-items/:id` | Correct a line item |
+| `DELETE` | `/api/line-items/:id` | Remove a line item |
+| `GET` | `/api/samples` | List the bundled sample documents |
+| `POST` | `/api/samples/:key` | Ingest a bundled sample |
+| `GET` | `/api/health` | Service status and active model |
+
+Request bodies are validated with Zod schemas from the shared package. The patch schemas accept
+only human-correctable fields; flags, confidence, status and provenance are derived by the server
+and cannot be set by a client.
+
+A failed extraction returns `201` with `status: "failed"` and the raw model output attached. It is
+a recorded outcome rather than a server error, and returning `5xx` would make it
+indistinguishable from a service fault.
+
+Every mutation re-runs the deterministic checks against the whole extraction and returns the
+updated record. Editing a single line item re-checks the entire invoice, since one row affects
+whether the totals reconcile.
+
+The original file is served through a short-lived signed URL rather than a public bucket URL,
+keeping the service-role key server-side.
+
+## 7. Frontend
+
+React with TypeScript, Vite and Tailwind CSS. TanStack Query manages server state; each mutation
+returns the complete record and writes it directly into the cache, so flags and status update
+immediately after an edit.
+
+**Upload** — a drop zone accepting PDF and `.xlsx` files, plus buttons that ingest each of the
+four bundled samples.
+
+**Records list** — filename, file kind, status, vendor, grand total, confidence and flag count.
+Records needing attention are listed first.
+
+**Record detail** — a two-pane review screen. The left pane shows the source document: PDFs in an
+embedded viewer, spreadsheets as a download link, since they cannot be previewed in the browser.
+The right pane shows the record as editable fields — header fields, a line-item grid supporting
+edit, add and delete, and a totals section. Flagged fields are outlined and display the reason in
+plain language beneath them, including the relevant figures.
+
+Below the totals, a live arithmetic summary mirrors the server's two-stage reconciliation and
+updates as values are edited. This is a client-side convenience; the server recomputes and remains
+authoritative. An expandable extraction log shows the model used, pass and attempt counts, token
+usage, latency and each repair step.
+
+Fields commit on blur rather than on each keystroke, since every commit triggers a request that
+re-evaluates the record.
+
+## 8. Sample Documents
+
+Four sample invoices are generated by scripts in `samples/generate` from a single fixture that
+also defines the expected extraction results, so the documents and their expectations stay
+consistent.
+
+| File | Type | Tests |
 |---|---|---|
-| `POST` | `/api/documents` | multipart upload → store → insert → **run pipeline synchronously** → return full record. |
-| `GET` | `/api/documents` | list for the table: id, filename, kind, status, vendor, grandTotal, confidence, flagCount, createdAt. |
-| `GET` | `/api/documents/:id` | full record: document + current extraction + line items + flags + repair log. |
-| `GET` | `/api/documents/:id/file` | 302 to a short‑lived Supabase signed URL (source viewer). |
-| `POST` | `/api/documents/:id/reextract` | re‑run pipeline; new `extractions` row, old one `isCurrent=false`. |
-| `PATCH` | `/api/extractions/:id` | correct header fields. Re‑runs §5.8 checks server‑side, recomputes flags/status/confidence. |
-| `PATCH` | `/api/line-items/:id` | correct a row. Re‑runs checks on the parent extraction. |
-| `POST` | `/api/extractions/:id/line-items` | add a row during review. |
-| `DELETE` | `/api/line-items/:id` | delete a row. |
-| `POST` | `/api/extractions/:id/review` | "Mark reviewed" — human override, sets `reviewedAt`, status → `extracted`. |
+| `acme-supplies.pdf` | Text PDF | Baseline: conventional layout and labels |
+| `northwind-trading.pdf` | Text PDF | Vendor name only in the letterhead, non-standard field labels, tax identifiers resembling invoice numbers, Indian digit grouping, and a discount and tax band between the line items and the total |
+| `blue-ridge-scan.pdf` | Scanned PDF | Degraded scan with no text layer: rotation, blur, noise, low contrast, and localised obstructions over specific values |
+| `zenith-parts.xlsx` | Excel | Data not starting at A1, merged title rows, line items split across two blocks, unit price before quantity, an intermediate subtotal that is not the invoice subtotal, and one blank amount cell |
 
-**Conventions:**
+The scanned sample is intentionally difficult and is expected to require human review. Extraction
+results for all four are committed under `samples/output`.
 
-- Every body/param parsed with a zod schema from `packages/shared`. 400 + the zod error path on failure.
-- Errors: `{ error: { code, message, detail? } }`, consistent.
-- **Extraction failure is not a 5xx.** It's a `201` with `status: 'failed'` and populated flags — a failed extraction is a legitimate, well‑modeled outcome, not a server error. Only actual bugs and a dead upstream return 5xx. Worth a line in the README.
-- **Checks re‑run server‑side on every PATCH.** The client shows live arithmetic for responsiveness, but the server is the authority. Never trust the browser's math on money.
-- Upload guard: 10 MB, `application/pdf` + `.xlsx` + `image/png|jpeg` only, magic‑byte check not just extension.
+## 9. Error Handling and Review
 
----
+Section 4 covers how malformed and truncated model output is repaired. The table below covers the
+cases where extraction succeeds but a value cannot be trusted.
 
-## 8. Frontend
+| Situation | Handling |
+|---|---|
+| Value not present on the document | Field set to `null`, flagged as missing |
+| Value present but unreadable | Field set to `null`, flagged as illegible from the model's own report |
+| Passes disagree on a value | Majority or temperature-0 value used, field flagged |
+| Totals do not reconcile | Field flagged with both figures and the difference |
+| Ambiguous date format | Normalised to one reading, flagged with both interpretations |
+| No valid output after all attempts | Record saved as `failed` with the raw model output retained |
+| Rate limit or service error | Retried with backoff, not treated as an extraction failure |
 
-Three screens. One job: **make a human fast at fixing bad extractions.**
+Flags carry a field path, a reason, a severity and a human-readable explanation containing the
+relevant values. They are attached either to the extraction or to the specific line item they
+concern.
 
-### 8.1 Upload (`/`)
-Drag‑drop or picker. **Plus four "Try a sample" buttons** that upload the committed sample files — makes the reviewer's first 30 seconds work, for ~15 minutes of effort. Inline state: `uploading → extracting… → done`, then navigate to the record.
+A reviewer corrects fields directly in the interface. Each save re-runs the checks, so flags clear
+when the underlying problem is resolved and new ones appear if an edit introduces an
+inconsistency. Flags reporting that the model could not read a field are dropped once a human has
+entered a value for it.
 
-### 8.2 List (`/records`)
-Table: filename · kind badge (`PDF` / `Scanned` / `Excel`) · **status pill** (green `extracted`, amber `needs review`, red `failed`) · vendor · grand total · confidence bar · flag count · date. Amber/red sorted first — the point of a review queue is surfacing what needs a human.
+A record can be marked reviewed with flags outstanding, since some flags — an ambiguous date, for
+example — cannot be resolved from the document alone.
 
-### 8.3 Record detail (`/records/:id`) — the screen that matters
+## 10. Known Limitations
 
-**Two panes.**
+- Extraction is synchronous, so a slow document holds the request open.
+- Confidence weights are chosen by hand rather than calibrated against labelled data.
+- Agreement between passes indicates stability, not correctness; passes can agree and still be
+  wrong.
+- A response that validates against the schema is not evidence that its values are right. Only the
+  deterministic checks catch semantically incorrect output.
+- Scanned document quality depends entirely on the vision model. There is no separate OCR stage
+  and no per-character confidence available.
+- `MM/DD` and `DD/MM` dates are normalised to one reading and flagged; they cannot be resolved
+  from a single document.
+- Arithmetic checks assume one currency per invoice.
+- Long invoices can exceed the output token limit. Truncation is detected and recovered as far as
+  possible, but very long documents remain a limit.
+- The Gemini free tier is capped per day per model, which constrains how many extractions can be
+  run.
+- There is no authentication. Anyone with access to the API can read and modify all records.
 
-- **Left — the source.** PDF in an `<iframe>` (works for both text and scanned PDFs — no separate image path needed); xlsx re‑rendered as an HTML table. The reviewer verifies against ground truth without leaving the app. Highest‑value UI decision in the build.
-- **Right — the extracted record, editable.**
-  - Status banner: pill + confidence + "3 fields need attention".
-  - Header fields (vendor, number, date, currency) as inputs.
-  - Line items as an editable grid: edit cells, add row, delete row.
-  - Below the grid, the **totals band** — subtotal, discount, tax, grand total — as inputs, laid out the way an invoice lays them out, so the reviewer's eye maps straight from the source pane.
-  - **Every flagged field carries an amber/red ring and a chip explaining *why*, in plain language:**
-    - *"Doesn't add up: line items total ₹1,240.00 but the invoice states ₹1,245.00"*
-    - *"The 3 extraction passes disagreed here (₹450 / ₹480 / ₹450)"*
-    - *"The model reported this region of the scan as unreadable rather than guessing"*
-    - *"Ambiguous date: 03/04/2025 could be 3 Apr or 4 Mar"*
-  - **Live arithmetic strip** under the totals band, mirroring the two‑stage check: `Σ lines 1,240.00 → subtotal 1,240.00 ✓ · −disc 40.00 +tax 223.20 → total 1,423.20 ✓`, recomputed as you type, with the failing stage marked. Server re‑validates on save.
-  - **"Show extraction log"** disclosure: provider, model, escalation, sample count, attempts, repair steps, tokens, latency. Small, but it's the receipts for grading criterion #2.
-  - Actions: **Save** · **Mark reviewed** (human takes responsibility, clears soft flags) · **Re‑extract**.
+## 11. Future Improvements
 
-### 8.4 States
-TanStack Query for cache + invalidation after mutations. Loading skeletons, error toasts, empty state. Tailwind only; headless‑ui if a tooltip/dialog is needed. "Clean and usable," then stop.
-
----
-
-## 9. The 4 sample files
-
-Generated by committed scripts in `samples/generate/` — reproducible, and the generator code itself demonstrates judgment about *what makes documents hard*. All vendors fictional.
-
-| # | File | Format | Deliberate difficulty | Expected outcome |
-|---|---|---|---|---|
-| 1 | `acme-supplies.pdf` | PDF, text layer | Clean baseline. `Invoice #`, headed table, total bottom‑right, USD. | `extracted`, confidence > 0.9 |
-| 2 | `northwind-trading.pdf` | PDF, text layer | **Label variance + number format**: vendor only in a logo block, `Bill No.` not "Invoice Number", date `14‑Mar‑2025`, Indian grouping `Rs. 1,23,456.00`, and a **discount row + GST row** between line items and total (so naive `Σ lines == total` fails *legitimately* — this sample exists to prove the two‑stage reconciliation works). | `extracted`, both reconciliation stages balancing — **no false‑positive flag** |
-| 3 | `blue-ridge-scan.pdf` | **Scanned image PDF** | See §9.1 — targeted degradation. | `needs_review` / `failed`, flags on *specific* fields |
-| 4 | `zenith-parts.xlsx` | Excel | Data doesn't start at A1 (3 title rows, merged cells), line items split across **two blocks** with a subtotal between, `TOTAL DUE` four rows below the table, **qty and unit‑price columns swapped** relative to the other invoices, one `lineTotal` cell left blank. | `needs_review` — blank line total flagged `missing`; row arithmetic can actually recover it |
-
-### 9.1 Sample #3 — the degradation spec
-
-Goal: *barely human‑readable, with specific values genuinely hard for the model.* So degradation is **targeted, not uniform** — a uniformly mushy page produces a uniformly useless result, which proves nothing. Most of the document stays readable and **three specific values become genuinely ambiguous**, so the flags land precisely and provably.
-
-Build: render a clean invoice with `pdfkit` → rasterize → degrade with `sharp` → re‑wrap as a single‑page PDF **with no text layer**.
-
-**Global degradation (makes it a hard scan):**
-- Rotate **−1.8°** with off‑white fill (skew, like a hand‑fed scanner) — *directly violates Google's "rotate pages to the correct orientation" guidance, on purpose*
-- Gaussian blur **σ ≈ 0.9** — violates "avoid blurry pages", also on purpose
-- Gaussian noise **σ ≈ 12/255**
-- Contrast crush: black→`#3a3a3a`, white→`#dcdcd6` (faded photocopy)
-- Vertical gradient darkening down the page (uneven scan lamp)
-- Re‑encode at **JPEG quality 35** → ringing artifacts around glyphs
-- Downscale to ~110 DPI then upscale to 180 — throws away real detail
-
-**Targeted difficulty (what makes the flags meaningful):**
-1. **Coffee‑ring stain** (semi‑transparent brown radial PNG) over the **grand total's** middle digits → genuinely partially occluded. Expect `illegible_source` + `math_mismatch`.
-2. **Digit ambiguity in the invoice date** — glyphs chosen to blur into each other: `08/03/2025` where the `8` degrades toward `3`/`6`. Expect `disagreement` across the 3 samples.
-3. **One line item's unit price** in the darkest gradient band with extra local blur → expect `null` or 3‑way disagreement, which breaks that row's arithmetic → `row_math_mismatch`.
-4. Vendor name and invoice number left **relatively legible** — so the extraction is partially useful and the contrast between "confident here / uncertain there" is visible on screen. A document where everything fails is a far less interesting demo than one where the system draws a precise line.
-
-**Calibration rule while building:** if it extracts perfectly, degrade further. If it returns nothing, back off. Target **~60–70% of fields recovered, the three planted values flagged.** Tune the **generator**, never the prompt — tuning a prompt to pass a test you wrote is exactly the self‑deception this brief is screening for. Gemini's OCR is strong, so expect to push the degradation harder than feels reasonable.
-
-### 9.2 `samples/output/`
-Committed extraction JSON for all four — the full API record including flags, confidence, status, repair log. Doubles as the fixture set for the eval script.
-
----
-
-## 10. Improvements beyond the brief
-
-Ordered by value‑per‑hour. **Bold** items are in the plan; the rest are stretch.
-
-1. **`meta.illegibleFields` envelope** (§5.2) — the model reports what it couldn't read instead of guessing. Core idea. Do it.
-2. **Self‑consistency sampling as the confidence signal** (§5.6). Do it.
-3. **Two‑stage arithmetic reconciliation** over an explicit subtotal/discount/tax band (§5.1, §5.8) — strongest hallucination catch, zero model cost, and it doesn't cry wolf on invoices that legitimately have tax. Do it.
-4. **Side‑by‑side source vs. form review** (§8.3) — biggest usability win. Do it.
-5. **Flash→Pro escalation on low confidence** (§5.7) — ~20 lines, real production pattern. Do it.
-6. **Repair log surfaced in the UI** — receipts for criterion #2. Do it, it's small.
-7. **"Try a sample" buttons** — makes the reviewer's first 30 seconds work. Do it.
-8. **`currency` field** — one extra field, real value. Do it.
-9. **Minimal eval harness**: `npm run eval` runs all 4 samples, diffs against `samples/output/`, prints field‑level accuracy + flag precision. Even 40 lines signals "I think in evals," which the job description explicitly asks for. Do a small one.
-10. **Second provider behind the interface + comparison table in the README** (§2) — strong differentiator, only after everything works. *Stretch.*
-11. Span grounding — model returns the source region per field, highlight on hover. *Stretch.*
-12. Vendor memory — once a vendor is corrected, few‑shot the next invoice from that vendor with the corrected prior. *Stretch, but great to describe in the README.*
-
-**Explicitly not doing:** job queue, SSE/websocket progress, auth, deployment, multi‑user, PDF form fields, table‑structure ML, exhaustive locale handling, Files API for large documents.
-
----
-
-## 11. What I'd do with more time (README draft)
-
-- **Async extraction**: BullMQ/Redis or Supabase pg‑cron + worker, status polling in the UI. Right answer at any real volume; skipped deliberately at n=4.
-- **Proper audit trail**: `field_edits` table (who/when/before/after) + diff view. Corrections are training data.
-- **A dedicated OCR stage** for scans (Document AI / Textract / PaddleOCR) with **word‑level confidence scores**, feeding the LLM higher‑quality text plus a per‑token certainty signal. Gemini's OCR is strong but returns no per‑character confidence — a real OCR engine does, and that's a strictly better uncertainty signal than anything we're computing.
-- **Calibrate confidence** against a few hundred labeled invoices instead of 4 — current weights are reasoned, not fitted.
-- **Vendor templates**: cluster by vendor, learn field locations, fall back to the LLM only on novel layouts. Cheaper and more accurate at volume.
-- **Span grounding + click‑to‑highlight** on the source.
-- **Tests**: pipeline units against recorded LLM fixtures (no live calls in CI), API integration tests, 2–3 Playwright flows over the review screen.
-- **Observability**: every LLM call logged (prompt, response, tokens, latency, cost) to a table; a small cost/accuracy dashboard.
-
----
-
-## 12. Known limitations (README draft)
-
-- Extraction is **synchronous**; a slow file blocks the request. Fine at this scale, wrong in production.
-- **Confidence is heuristic**, not calibrated — the weights in §5.9 are reasoned, not fitted to data.
-- **Self‑consistency detects instability, not correctness.** Three runs can agree and all be wrong. Agreement is necessary, not sufficient.
-- **`responseSchema` guarantees shape, not truth.** Schema‑valid and semantically wrong is the failure mode that actually hurts, and only the deterministic checks catch it.
-- **Scanned quality depends entirely on the vision model.** No dedicated OCR fallback, and no per‑character confidence to lean on — a page Gemini can't read is a page we can't read.
-- **`MM/DD` vs `DD/MM`** is guessed and flagged, not resolved. It *cannot* be resolved from a single document without vendor context.
-- **Single‑currency assumption** in the arithmetic check; mixed‑currency invoices flagged, not handled.
-- **Long invoices** can hit `MAX_TOKENS` mid‑JSON; we detect, repair, and escalate, but very long documents remain a real limit.
-- Free‑tier **rate limits** cap throughput; 3 samples per document multiplies request count 3×.
-- **No auth** — anyone with the URL reads and edits everything.
-
----
-
-## 13. Build order (the 4–6 hours)
-
-| # | Time | Deliverable |
-|---|---|---|
-| 0 | 25m | Workspaces scaffold · shared zod schema + `responseSchema` conversion · Supabase project + bucket · Drizzle schema + first migration · env wiring · **verify Gemini model IDs, and that `responseSchema` + PDF input compose in one call**. |
-| 1 | 50m | Sample generators → 4 files in `samples/input/`. Most of this is #3's degradation calibration. |
-| 2 | 20m | Classify + prepare: pdfjs classification, SheetJS→markdown. CLI: `npm run prepare <file>`. |
-| 3 | 60m | Provider interface + Gemini impl + prompt + `responseSchema` call + local repair + zod validate + repair loop + escalation. CLI: `npm run extract <file>` prints the record. |
-| 4 | 35m | Self‑consistency + deterministic checks + confidence/status. Pure functions, a few unit tests. |
-| 5 | 45m | API: upload → storage → pipeline → persist; list; get; file; re‑extract. |
-| 6 | 25m | PATCH endpoints + server‑side re‑check on save + mark‑reviewed. |
-| 7 | 75m | Frontend: upload (+ sample buttons), list, two‑pane detail with flag chips, editable grid, live arithmetic, extraction log. |
-| 8 | 25m | Run all 4, commit `samples/output/`, minimal eval script. |
-| 9 | 35m | README (setup, architecture, trade‑offs, limitations). |
-
-*(~6h05 at full scope; the Gemini choice already bought back the ~40 min a rasterization stage would have cost.)*
-
-**If time runs short, cut in this order:** second provider → eval script → re‑extract button → source viewer (fall back to a download link) → escalation → self‑consistency (drop to 1 sample).
-
-**Do not cut, at any cost:** the repair loop, the arithmetic checks, `meta.illegibleFields` propagation, flag chips with plain‑language reasons, and the scan honestly landing in `needs_review`. That list *is* the submission.
-
----
-
-## 14. Remaining decisions
-
-1. **"Anything you want us to know"** — use it to name the non‑obvious calls: *(a) the model reports which fields it couldn't read rather than guessing, and that propagates all the way to a flag in the UI; (b) confidence is computed from cross‑sample disagreement and arithmetic reconciliation, never taken from the model's self‑report; (c) the scanned sample is deliberately adversarial and is supposed to land in `needs_review` — that's the feature, not a miss.*
-2. **Gemini model IDs** — pinned in env, verified in step 0. If `gemini-3.7-flash` isn't available on your key, `gemini-3.6-flash` is the drop‑in; note the swap in the README.
-3. **Rate limits** — if the free tier throttles during development, drop `EXTRACTION_SAMPLES` to 1 while building and turn it back to 3 for the final sample run that generates `samples/output/`.
+- Move extraction to a background worker with status polling.
+- Add a dedicated OCR stage for scanned documents to obtain word-level confidence scores.
+- Record field edits in a dedicated audit table rather than appending to a JSON column.
+- Calibrate confidence weights against a labelled set of real invoices.
+- Return the source region for each field and highlight it in the document viewer.
