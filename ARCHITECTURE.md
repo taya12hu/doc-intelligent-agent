@@ -5,12 +5,10 @@
 The Document Intelligence Agent extracts structured invoice data from PDF and Excel documents
 using a large language model, validates the result, and presents it for human review.
 
-Documents vary widely in layout, labelling and quality, and language models do not reliably
-produce correct output from them. The system is therefore built on the assumption that any
-extraction may be wrong: model output is validated against a schema, checked against independent
-arithmetic rules, and any field that cannot be confirmed is flagged rather than silently
-accepted. A reviewer sees the original document alongside the extracted record and can correct
-it.
+Invoices vary widely in layout, labelling and quality, and language models do not reliably read
+them correctly. The system is therefore built on the assumption that any extraction may be wrong:
+output is validated against a schema, checked against independent arithmetic, and anything that
+cannot be confirmed is flagged rather than silently accepted.
 
 ## 2. Architecture
 
@@ -27,7 +25,7 @@ it.
                   │       Zod validation + repair                │
                   │       consensus across passes                │
                   │       deterministic checks                   │
-                  │       confidence + status                    │
+                  │       review score + status                    │
                   │  5. persist extraction + line items          │
                   └───────────────────┬──────────────────────────┘
                                       │ Drizzle
@@ -44,9 +42,8 @@ it.
 | `packages/shared` | Invoice schema, flag types, API DTOs, money parsing |
 | `samples/generate` | Scripts that produce the sample invoices from a fixture |
 
-`packages/shared` holds a single Zod definition of the invoice record, which produces the
-TypeScript types used by both applications, the runtime validator, and the response schema sent
-to the model.
+`packages/shared` holds one Zod definition of the invoice, producing the TypeScript types both
+apps use, the runtime validator, and the response schema sent to the model.
 
 ## 3. Backend
 
@@ -55,16 +52,13 @@ to the extraction pipeline for processing; they contain no SQL.
 
 ### Upload flow
 
-1. Uploaded bytes are checked against a size limit and their magic bytes. The declared MIME type
-   and file extension are not trusted; the extension is used only to distinguish an `.xlsx`
-   workbook from other ZIP archives.
-2. The file is classified as `pdf_text`, `pdf_scanned` or `xlsx`. For PDFs the embedded text
-   layer is extracted with `pdfjs-dist` and measured — fewer than roughly 50 characters per page
-   indicates a scan.
-3. Classification runs before storage, so an unreadable file does not leave an orphaned object in
-   the bucket.
-4. The original file is uploaded to a private Supabase Storage bucket and a `documents` row is
-   created.
+1. Bytes are checked against a size limit and their magic bytes. The declared MIME type and
+   extension are not trusted; the extension only distinguishes an `.xlsx` workbook from other ZIP
+   archives.
+2. The file is classified `pdf_text`, `pdf_scanned` or `xlsx`. For PDFs the embedded text layer is
+   measured with `pdfjs-dist` — under roughly 50 characters per page indicates a scan.
+3. Classification runs before storage, so an unreadable file leaves no orphaned object.
+4. The file goes to a private Supabase Storage bucket and a `documents` row is created.
 5. The extraction pipeline runs and the result is persisted.
 
 Extraction runs synchronously within the upload request. The `pending` and `processing` statuses
@@ -73,21 +67,20 @@ require a schema change.
 
 ### Persistence
 
-Drizzle ORM over `postgres.js`. Monetary columns use Postgres `numeric` and are read back as
-JavaScript numbers, so the API, the validation checks and the frontend all handle the same type.
-The database client detects Supabase's transaction pooler (port 6543) and disables prepared
-statements, which that pooler does not support.
+Drizzle ORM over `postgres.js`. Monetary columns use Postgres `numeric`, read back as JavaScript
+numbers so the API, the checks and the frontend all hold the same type. The client detects
+Supabase's transaction pooler (port 6543) and disables prepared statements, which it does not
+support.
 
 ## 4. LLM Extraction
 
 ### Provider
 
-Gemini is the primary provider, accessed through an `LLMProvider` interface exposing a single
-`extract` method. Everything above that interface — repair, consensus, validation, confidence —
-is provider-agnostic.
+Gemini sits behind an `LLMProvider` interface exposing a single `extract` method; everything above
+it — repair, consensus, validation, scoring — is provider-agnostic.
 
-Gemini supports native PDF input and structured output in the same request, so text PDFs and
-scanned PDFs use the same code path with no rasterisation step.
+Gemini accepts native PDF input and structured output in the same request, so text and scanned
+PDFs share one code path with no rasterisation step.
 
 ### Input preparation
 
@@ -96,53 +89,48 @@ scanned PDFs use the same code path with no rasterisation step.
 | `pdf_text`, `pdf_scanned` | Raw PDF bytes sent inline, unmodified |
 | `xlsx` | Parsed with SheetJS into Markdown tables preserving column letters, row numbers and merged ranges |
 
-PDFs are passed through untouched because the model reads the page as laid out; extracting text
-first flattens the table structure that gives an invoice its meaning. Spreadsheets cannot be read
-directly, and the Markdown rendering keeps cell addresses because position carries meaning —
-data may not start at A1, and a total may sit several rows below the table it summarises.
+PDFs pass through untouched because the model reads the page as laid out; extracting text first
+flattens the table structure that gives an invoice its meaning. Spreadsheets cannot be read
+directly, and the rendering keeps cell addresses because position carries meaning — data may not
+start at A1, and a total may sit several rows below the table it summarises.
 
 ### Structured output
 
-The request sets `responseMimeType: application/json` and a `responseSchema` derived from the Zod
-schema. Gemini accepts an OpenAPI 3.0 subset rather than JSON Schema — uppercase type names,
-`nullable: true` instead of type unions, no `$ref`, and a Gemini-specific `propertyOrdering`
-field — so the conversion is handled by a small purpose-built function.
+The request carries a `responseSchema` derived from the Zod definition. Gemini takes an OpenAPI
+3.0 subset rather than JSON Schema, so a small purpose-built converter handles it; a generic one
+emits something the API rejects.
 
-Every field is nullable and none are optional, which forces the model to emit an explicit `null`
-for a value it did not find rather than omitting the key. Per-field descriptions live on the
-schema rather than in the prompt.
+Every field is nullable and none optional, forcing an explicit `null` for a value the model did
+not find rather than a missing key. Per-field descriptions live on the schema, not the prompt.
 
-The model returns an envelope with two parts:
+The response is an envelope: `invoice` holds the record, and `meta` holds the model's own report —
+which fields it could not read, a legibility rating, the invoice date exactly as printed, and
+notes. `meta` drives the flagging logic but is never written into the record.
 
-- `invoice` — vendor, invoice number, date, currency, line items, subtotal, discount, tax and
-  grand total.
-- `meta` — field paths the model could not read, an overall legibility score, the invoice date
-  exactly as printed, and free-text notes.
-
-`meta` is stored with the extraction and drives the flagging logic, but is never written into the
-record. `illegibleFields` lets the model state that it could not read a value instead of guessing
-at it, and `invoiceDateAsPrinted` preserves the original date string, which is what keeps
-`MM/DD` versus `DD/MM` ambiguity detectable after normalisation. Field paths returned by the
-model are normalised before use, as the model may prefix them with the envelope key.
+Two parts of `meta` earn their place. `illegibleFields` lets the model decline a value rather than
+guess at it, and `invoiceDateAsPrinted` preserves the original string, which is what keeps `MM/DD`
+versus `DD/MM` ambiguity detectable after normalisation. Field paths from the model are normalised
+before use, since it may prefix them with the envelope key.
 
 ### Validation and repair
 
-Structured output constrains the shape of a response, not its correctness, and does not always
-constrain the shape reliably. Each pass runs through an escalating sequence:
+Structured output constrains shape, not correctness — and not always shape. Each pass escalates,
+cheapest rung first:
 
-1. **Local repair** — strip Markdown fences, extract the first balanced object, remove trailing
-   commas, close JSON truncated at the token limit. Truncation discards the incomplete trailing
-   element rather than reconstructing it.
-2. **Type coercion** — convert money-like strings to numbers, handling thousands separators
-   (including Indian grouping), European decimal commas, currency symbols, accounting parentheses
-   and unit suffixes. Values that cannot be coerced become `null`.
-3. **Repair request** — send the model its own output plus the validation errors and ask for a
-   correction, without repeating the extraction instructions.
-4. **Escalation** — retry once on a second model with a higher token limit.
-5. **Failure** — persist the raw output, mark the record `failed`, flag every field.
+1. **Local repair** (no API call) — fences, unbalanced braces, trailing commas, and JSON
+   truncated at the token limit. Truncation discards the incomplete trailing element rather than
+   reconstructing it; inventing the tail of a value is the failure this system exists to catch.
+2. **Type coercion** (no API call) — money-like strings become numbers, covering thousands
+   separators including Indian grouping, European decimal commas, symbols, accounting parentheses
+   and unit suffixes. Anything ambiguous becomes `null`.
+3. **Repair request** — the model receives its own output and the validation errors, without the
+   extraction instructions, so it corrects the error rather than re-reading the document and
+   changing values that were already right.
+4. **Escalation** — one retry on a second model with a higher token limit.
+5. **Failure** — persist the raw output and mark the record `failed`.
 
-Each pass is capped at four model calls, and every step is recorded in a repair log stored with
-the extraction.
+The first two rungs mean a trailing comma never costs a round trip. Each pass makes at most three
+model calls, all recorded in a repair log.
 
 Transport failures — rate limits, service errors, safety blocks — are handled separately from
 invalid output. They retry with backoff inside the provider, honouring the retry delay returned
@@ -159,15 +147,20 @@ temperature 0. Results are compared field by field:
 | Majority agrees | Majority value, warning flag |
 | All passes differ | Temperature-0 value, error flag |
 
+**This measures stability, not correctness.** Passes can agree and still all be wrong — agreement
+is necessary, not sufficient. It identifies fields the model is unsure about, which is a different
+question from whether a value is right; the deterministic checks below are what address that.
+
 Comparison ignores cosmetic string differences. Line items are matched by position among the
-passes producing the most common row count; a disagreement about the number of rows flags the
+passes producing the most common row count; a disagreement about how many rows exist flags the
 line-item list as a whole rather than aligning rows that may not correspond. Passes run
-sequentially, so a partially exhausted API quota still yields a usable record from fewer passes,
-with the reduced count recorded on the extraction.
+sequentially, so a partially exhausted quota still yields a usable record from fewer passes, with
+the reduced count recorded on the extraction.
 
 ### Deterministic checks
 
-These run after consensus and do not involve the model.
+These run after consensus and involve no model. They are the only layer that detects a value being
+wrong rather than merely unstable.
 
 | Check | Description |
 |---|---|
@@ -180,24 +173,32 @@ These run after consensus and do not involve the model.
 | Implausible values | Negative totals, unreasonable quantities, out-of-range dates, order-of-magnitude mismatches |
 
 Subtotal, discount and tax are modelled as explicit fields rather than inferred. A single check
-comparing line items directly against the grand total would report a mismatch on any invoice
-carrying tax, which is a false positive on a correct extraction.
+comparing line items directly against the grand total reports a mismatch on any invoice carrying
+tax — a false positive on a correct extraction, and a flag that fires when nothing is wrong
+teaches reviewers to ignore flags.
 
-When a line total is blank but quantity and unit price are present, the value is derived for
-reconciliation purposes only. The record keeps the null, and the flag includes the derived figure
-as a suggestion to confirm.
+Where a line total is blank but quantity and unit price are present, the value is derived for
+reconciliation only. The record keeps the null and the flag carries the derived figure as a
+suggestion to confirm.
 
-### Confidence and status
+### Review score and status
 
-Confidence starts at 1.0, less 0.15 per error flag, 0.05 per warning, and 0.1 if the repair loop
-ran. The result is multiplied by the model's reported legibility, so a poor scan caps the score
-regardless of the other checks; legibility can only lower it, never raise it.
+Each record carries a **heuristic review score** — a number for ordering a queue, not a
+calibrated probability. It starts at 1.0, is reduced per flag (more for errors than warnings, plus
+a penalty if the repair loop ran), then multiplied by the model's reported legibility, so a poor
+scan caps the score however clean the arithmetic looks. Legibility can only lower it, never raise
+it: a model's assessment of its own output is not evidence.
+
+The weights are hand-chosen, not fitted to labelled data. A score of 0.85 does not mean an 85%
+chance of being correct; it means fewer and less severe flags than one scoring 0.5.
+
+Status is derived from the flags themselves, not the score:
 
 | Status | Condition |
 |---|---|
 | `extracted` | No flags |
 | `needs_review` | One or more flags, record usable |
-| `failed` | No valid object after repair and escalation, or three or more error flags on required fields |
+| `failed` | No valid object after repair and escalation, or three or more error-severity flags |
 
 ## 5. Data Model
 
@@ -218,19 +219,17 @@ One row per uploaded file.
 
 One row per extraction attempt, referencing a document. Columns fall into three groups:
 
-- **Provenance** — provider, model, escalation model, pass and attempt counts, latency, token
-  usage, the repair log, and a JSON column holding the `meta` envelope, each pass's invoice, the
-  agreement map and any raw output from a failed run.
-- **Verdict** — status, confidence and the flag list.
-- **The record** — vendor name, invoice number, invoice date, currency, subtotal, discount total,
-  tax total and grand total, all directly editable by a reviewer.
+- **Provenance** — provider, models used, pass and attempt counts, latency, token usage, the
+  repair log, and a JSON column holding the `meta` envelope, each pass's invoice, the agreement
+  map, and any raw output from a failed run.
+- **Verdict** — status, review score and flags.
+- **The record** — vendor, invoice number, date, currency, subtotal, discount, tax and grand
+  total, all directly editable by a reviewer.
 
-There is no separate table for the reviewed record. The extraction is the record, and human
-corrections update it in place, with an edit trail appended to the JSON provenance column.
-
-Re-running extraction inserts a new row and sets `is_current = false` on the previous one,
-preserving earlier results including any corrections made to them. An index on
-`(document_id, is_current)` supports the common lookup.
+There is no separate table for the reviewed record: the extraction *is* the record, and
+corrections update it in place with an edit trail appended to the provenance column. Re-running
+extraction inserts a new row and sets `is_current = false` on the previous one, preserving earlier
+results including any corrections to them.
 
 ### `line_items`
 
@@ -247,8 +246,8 @@ One row per invoice line, referencing an extraction.
 
 Line items are stored separately rather than as JSON so individual rows can be updated, added or
 deleted, and so the server can re-run arithmetic checks on the result. Monetary columns use
-`numeric`, never floating point. Flag lists are stored as JSONB, as they are display metadata and
-are not queried relationally.
+`numeric`, never floating point. Flag lists are JSONB — display metadata, never queried
+relationally.
 
 ## 6. API
 
@@ -270,120 +269,110 @@ All routes are under `/api`. There is no authentication.
 | `POST` | `/api/samples/:key` | Ingest a bundled sample |
 | `GET` | `/api/health` | Service status and active model |
 
-Request bodies are validated with Zod schemas from the shared package. The patch schemas accept
-only human-correctable fields; flags, confidence, status and provenance are derived by the server
-and cannot be set by a client.
+Request bodies are validated with Zod schemas from the shared package. Patch schemas accept only
+human-correctable fields; flags, score, status and provenance are server-derived and cannot be set
+by a client.
 
-A failed extraction returns `201` with `status: "failed"` and the raw model output attached. It is
-a recorded outcome rather than a server error, and returning `5xx` would make it
-indistinguishable from a service fault.
+A failed extraction returns `201` with `status: "failed"` and the raw output attached — a recorded
+outcome, not a server error, and a `5xx` would be indistinguishable from a service fault.
 
 Every mutation re-runs the deterministic checks against the whole extraction and returns the
-updated record. Editing a single line item re-checks the entire invoice, since one row affects
+updated record. Editing one line item re-checks the entire invoice, since a single row affects
 whether the totals reconcile.
 
-The original file is served through a short-lived signed URL rather than a public bucket URL,
-keeping the service-role key server-side.
+The original file is served through a short-lived signed URL, keeping the service-role key
+server-side.
 
 ## 7. Frontend
 
-React with TypeScript, Vite and Tailwind CSS. TanStack Query manages server state; each mutation
-returns the complete record and writes it directly into the cache, so flags and status update
-immediately after an edit.
+React, TypeScript, Vite and Tailwind. TanStack Query manages server state; each mutation returns
+the complete record and writes it straight into the cache, so flags and status update immediately
+after an edit.
 
-**Upload** — a drop zone accepting PDF and `.xlsx` files, plus buttons that ingest each of the
-four bundled samples.
+**Upload** — a drop zone plus buttons that ingest each of the four bundled samples.
 
-**Records list** — filename, file kind, status, vendor, grand total, confidence, flag count and
-the time added. Records needing attention are listed first, and the list can be filtered by
-Needs attention / Reviewed / All. Hovering a flag count expands it into the individual flags with
-their field paths and reasons, so a record can be triaged without opening it.
+**Records list** — filename, file kind, status, vendor, grand total, review score, flag count and
+time added. Records needing attention come first, and the list filters by Needs attention /
+Reviewed / All. Hovering a flag count expands it into the individual flags with their field paths
+and reasons, so a record can be triaged without opening it.
 
-**Record detail** — a two-pane review screen. The left pane shows the source document: PDFs in an
-embedded viewer, spreadsheets as a download link, since they cannot be previewed in the browser.
-The right pane shows the record as editable fields — header fields, a line-item grid supporting
-edit, add and delete, and a totals section. Flagged fields are outlined and display the reason in
-plain language beneath them, including the relevant figures. A failed record shows why it failed
-in place of the flag list, distinguishing a refused request from output the model mangled.
+**Record detail** — two panes. The left shows the source document (PDFs inline; spreadsheets as a
+download, since browsers cannot preview them); the right shows the record as editable header
+fields, a line-item grid supporting edit, add and delete, and a totals section. Flagged fields are
+outlined and state their reason in plain language beneath them, with the relevant figures.
+
+Showing the source beside the record is the point of the screen: without it a reviewer can see
+that the numbers do not reconcile, but not which one is wrong.
+
+A live arithmetic summary below the totals mirrors the server's two-stage reconciliation as values
+are edited — a convenience only; the server recomputes and stays authoritative. Fields commit on
+blur, since each commit re-evaluates the record. An expandable log shows the models used, pass and
+attempt counts, tokens, latency and every repair step. A failed record shows why it failed in
+place of the flag list.
 
 ### Extraction state
 
 Extraction is synchronous and takes tens of seconds, so a single in-flight job is tracked
-application-wide rather than inside the page that started it. Every mutation that runs the
-pipeline registers with that state, which gives three things:
+application-wide rather than inside the page that started it. Every pipeline mutation registers
+with that state, which gives:
 
-- Only one extraction runs at a time. The drop zone is replaced by a progress panel rather than
-  disabled, since a greyed-out drop target still invites a drop.
-- A compact indicator in the navigation bar, so a running extraction stays visible after
-  navigating away from the upload screen.
-- Editing and re-extraction are disabled on the record screen while any extraction runs.
+- One extraction at a time. The drop zone is replaced by a progress panel rather than disabled,
+  since a greyed-out drop target still invites a drop.
+- A navigation-bar indicator, so a running extraction stays visible after navigating away.
+- Editing and re-extraction disabled on the record screen while any extraction runs.
 
-The progress panel reports the file name, elapsed time and the pipeline stage it is most likely
-in, but no percentage — a single synchronous request has no progress to report, and an estimated
-stage is honest where a fabricated percentage is not. The state clears on failure as well as
-success, so a failed job cannot leave the application permanently locked.
+The panel reports file name, elapsed time and likely stage, but no percentage: a single
+synchronous request has no progress to report, and an estimated stage is honest where a fabricated
+percentage is not. The state clears on failure as well as success, so a failed job cannot leave the
+application locked.
 
-### Record status in the interface
+### Reviewed as a display state
 
 Marking a record reviewed sets its status to `extracted` while leaving its flags in place. The
-list therefore shows a separate `Reviewed` state, derived from `reviewedAt`, so a record a person
-accepted with known problems is not displayed identically to one that had nothing flagged.
-
-Below the totals, a live arithmetic summary mirrors the server's two-stage reconciliation and
-updates as values are edited. This is a client-side convenience; the server recomputes and remains
-authoritative. An expandable extraction log shows the model used, pass and attempt counts, token
-usage, latency and each repair step.
-
-Fields commit on blur rather than on each keystroke, since every commit triggers a request that
-re-evaluates the record.
+list therefore derives a separate `Reviewed` state from `reviewedAt`, so a record a person
+accepted with known problems is not shown identically to one that had nothing flagged.
 
 ## 8. Sample Documents
 
-Four sample invoices are generated by scripts in `samples/generate` from a single fixture that
-also defines the expected extraction results, so the documents and their expectations stay
-consistent.
+Four invoices are generated by scripts in `samples/generate` from a single fixture that also
+defines their expected results, so documents and expectations cannot drift apart. The generator
+refuses to emit anything whose own arithmetic does not balance.
 
-| File | Type | Tests |
-|---|---|---|
-| `acme-supplies.pdf` | Text PDF | Baseline: conventional layout and labels |
-| `northwind-trading.pdf` | Text PDF | Vendor name only in the letterhead, non-standard field labels, tax identifiers resembling invoice numbers, Indian digit grouping, and a discount and tax band between the line items and the total |
-| `blue-ridge-scan.pdf` | Scanned PDF | Degraded scan with no text layer: rotation, blur, noise, low contrast, and localised obstructions over specific values |
-| `zenith-parts.xlsx` | Excel | Data not starting at A1, merged title rows, line items split across two blocks, unit price before quantity, an intermediate subtotal that is not the invoice subtotal, and one blank amount cell |
+They cover a conventional layout; one with unusual labels, tax identifiers resembling invoice
+numbers and a discount/tax band; a deliberately degraded scan with no text layer; and a
+spreadsheet with an offset origin, two item blocks and reordered columns. `README.md` describes
+each in detail.
 
-The scanned sample is intentionally difficult and is expected to require human review. Extraction
-results for all four are committed under `samples/output`.
+The scan is expected to require human review, and results for all four are committed under
+`samples/output`.
 
 ## 9. Error Handling and Review
 
-Section 4 covers how malformed and truncated model output is repaired. The table below covers the
-cases where extraction succeeds but a value cannot be trusted.
+Section 4 covers repairing malformed output and the checks that produce flags. What follows is how
+those outcomes reach a reviewer.
+
+A value that is absent, unreadable, unstable across passes, arithmetically inconsistent or
+ambiguously dated is set to `null` or kept with a flag — never silently accepted. Two cases are
+handled separately from the rest:
 
 | Situation | Handling |
 |---|---|
-| Value not present on the document | Field set to `null`, flagged as missing |
-| Value present but unreadable | Field set to `null`, flagged as illegible from the model's own report |
-| Passes disagree on a value | Majority or temperature-0 value used, field flagged |
-| Totals do not reconcile | Field flagged with both figures and the difference |
-| Ambiguous date format | Normalised to one reading, flagged with both interpretations |
-| No valid output after all attempts | Record saved as `failed` with the raw model output retained, flagged `extraction_failed` with a reason distinguishing a refused request from output the model mangled |
-| Rate limit or service error | Retried with backoff, not treated as an extraction failure |
+| No valid output after all attempts | Saved as `failed` with the raw output retained, flagged `extraction_failed` with a reason distinguishing a refused request from output the model mangled |
+| Rate limit or service error | Retried with backoff inside the provider; not treated as an extraction failure |
 
-Flags carry a field path, a reason, a severity and a human-readable explanation containing the
-relevant values. They are attached either to the extraction or to the specific line item they
-concern.
+Flags carry a field path, reason, severity and a human-readable explanation with the relevant
+values, attached to either the extraction or the specific line item.
 
-A reviewer corrects fields directly in the interface. Each save re-runs the checks, so flags clear
-when the underlying problem is resolved and new ones appear if an edit introduces an
-inconsistency. Flags reporting that the model could not read a field are dropped once a human has
-entered a value for it.
-
-A record can be marked reviewed with flags outstanding, since some flags — an ambiguous date, for
-example — cannot be resolved from the document alone.
+Each save re-runs the checks, so flags clear when the problem is fixed and new ones appear if an
+edit introduces an inconsistency. Flags saying the model could not read a field are dropped once a
+human has entered a value. A record can be marked reviewed with flags outstanding, since some — an
+ambiguous date — cannot be resolved from the document alone.
 
 ## 10. Known Limitations
 
 - Extraction is synchronous, so a slow document holds the request open.
-- Confidence weights are chosen by hand rather than calibrated against labelled data.
+- The review score is heuristic. Its weights are hand-chosen rather than fitted to labelled
+  data, and it should be read as a queue ordering rather than a probability.
 - Agreement between passes indicates stability, not correctness; passes can agree and still be
   wrong.
 - A response that validates against the schema is not evidence that its values are right. Only the
@@ -404,5 +393,5 @@ example — cannot be resolved from the document alone.
 - Move extraction to a background worker with status polling.
 - Add a dedicated OCR stage for scanned documents to obtain word-level confidence scores.
 - Record field edits in a dedicated audit table rather than appending to a JSON column.
-- Calibrate confidence weights against a labelled set of real invoices.
+- Calibrate the review score against a labelled set of real invoices.
 - Return the source region for each field and highlight it in the document viewer.
