@@ -116,12 +116,14 @@ export const CellInput = ({
   onCommit,
   flags,
   numeric,
+  disabled,
   className = '',
 }: {
   value: string | number | null;
   onCommit: (next: string | number | null) => void;
   flags: FieldFlag[];
   numeric?: boolean;
+  disabled?: boolean;
   className?: string;
 }) => {
   const asText = value === null ? '' : String(value);
@@ -139,8 +141,9 @@ export const CellInput = ({
       if (value !== null) onCommit(null);
       return;
     }
-    const parsed = Number(trimmed.replace(/[^0-9.\-]/g, ''));
-    if (!Number.isFinite(parsed)) {
+    // Same shared parser as NumberField and the extraction pipeline.
+    const parsed = coerceMoney(trimmed);
+    if (parsed === null) {
       setDraft(asText);
       return;
     }
@@ -150,7 +153,8 @@ export const CellInput = ({
   return (
     <input
       inputMode={numeric ? 'decimal' : 'text'}
-      className={`w-full rounded px-2 py-1 text-sm ring-1 ring-inset outline-none focus:ring-2 ${
+      disabled={disabled}
+      className={`w-full rounded px-2 py-1 text-sm ring-1 ring-inset outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400 ${
         numeric ? 'tnum text-right' : ''
       } ${flagRing(flags)} ${className}`}
       value={draft}

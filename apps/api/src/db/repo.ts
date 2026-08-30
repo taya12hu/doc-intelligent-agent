@@ -125,6 +125,7 @@ export const listDocuments = async (): Promise<DocumentListItem[]> => {
       currency: extractions.currency,
       confidence: extractions.confidence,
       flags: extractions.flags,
+      reviewedAt: extractions.reviewedAt,
     })
     .from(documents)
     .leftJoin(
@@ -154,6 +155,7 @@ export const listDocuments = async (): Promise<DocumentListItem[]> => {
       confidence: r.confidence,
       flagCount: flags.length,
       errorFlagCount: flags.filter((f) => f.severity === 'error').length,
+      reviewedAt: iso(r.reviewedAt),
       createdAt: r.createdAt.toISOString(),
     };
   });

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useDocuments } from '../api/hooks.js';
 import { ConfidenceBar } from '../components/ConfidenceBar.js';
-import { StatusPill } from '../components/StatusPill.js';
+import { StatusPill, pillState } from '../components/StatusPill.js';
 
 const KIND_LABEL: Record<string, string> = {
   pdf_text: 'PDF',
@@ -91,7 +91,7 @@ export const List = () => {
                   </Link>
                 </td>
                 <td className="px-3 py-2.5">
-                  <StatusPill status={row.status} />
+                  <StatusPill status={pillState(row.status, row.reviewedAt)} />
                 </td>
                 <td className="px-3 py-2.5 text-stone-700">{row.vendorName ?? '—'}</td>
                 <td className="tnum px-3 py-2.5 text-right text-stone-700">

@@ -15,6 +15,15 @@ import type {
  * server is a compile error here rather than an `undefined` in the UI.
  */
 
+/** A bundled sample document, as listed by the API. */
+export type SampleDTO = {
+  key: string;
+  filename: string;
+  label: string;
+  blurb: string;
+  available: boolean;
+};
+
 export class ApiRequestError extends Error {
   constructor(
     readonly status: number,
@@ -65,6 +74,11 @@ export const api = {
     form.append('file', file);
     return request<FullRecord>('/api/documents', { method: 'POST', body: form });
   },
+
+  listSamples: () => request<SampleDTO[]>('/api/samples'),
+
+  runSample: (key: string) =>
+    request<FullRecord>(`/api/samples/${key}`, { method: 'POST' }),
 
   reextract: (documentId: string) =>
     request<FullRecord>(`/api/documents/${documentId}/reextract`, { method: 'POST' }),

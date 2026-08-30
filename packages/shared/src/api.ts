@@ -98,6 +98,12 @@ export type DocumentListItem = {
   confidence: number | null;
   flagCount: number;
   errorFlagCount: number;
+  /**
+   * Set when a human explicitly accepted the record. A reviewed record keeps
+   * its flags, so without this the list cannot tell "extracted cleanly" from
+   * "a person signed this off despite outstanding flags".
+   */
+  reviewedAt: string | null;
   createdAt: string;
 };
 

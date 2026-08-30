@@ -48,6 +48,7 @@ export const LineItemGrid = ({
                     <CellInput
                       value={item.description}
                       flags={cell('description')}
+                      disabled={busy}
                       onCommit={(v) => onPatch(item.id, { description: v as string | null })}
                     />
                   </div>
@@ -55,6 +56,7 @@ export const LineItemGrid = ({
                     <CellInput
                       value={item.quantity}
                       numeric
+                      disabled={busy}
                       flags={cell('quantity')}
                       onCommit={(v) => onPatch(item.id, { quantity: v as number | null })}
                     />
@@ -63,6 +65,7 @@ export const LineItemGrid = ({
                     <CellInput
                       value={item.unitPrice}
                       numeric
+                      disabled={busy}
                       flags={cell('unitPrice')}
                       onCommit={(v) => onPatch(item.id, { unitPrice: v as number | null })}
                     />
@@ -71,6 +74,7 @@ export const LineItemGrid = ({
                     <CellInput
                       value={item.lineTotal}
                       numeric
+                      disabled={busy}
                       flags={cell('lineTotal')}
                       onCommit={(v) => onPatch(item.id, { lineTotal: v as number | null })}
                     />
