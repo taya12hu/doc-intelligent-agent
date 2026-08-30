@@ -13,6 +13,7 @@ import {
 import { ConfidenceBar } from '../components/ConfidenceBar.js';
 import { ExtractionLog } from '../components/ExtractionLog.js';
 import { ExtractionProgress } from '../components/ExtractionProgress.js';
+import { FailureNotice } from '../components/FailureNotice.js';
 import { TextField } from '../components/Field.js';
 import { FlagList } from '../components/FlagChip.js';
 import { LineItemGrid } from '../components/LineItemGrid.js';
@@ -78,8 +79,13 @@ export const RecordDetail = () => {
 
   const flags = extraction.flags;
   const recordFlags = flagsFor(flags, RECORD_FIELD);
-  const allFlags = [...flags, ...lineItems.flatMap((li) => li.flags)];
-  const { error: errorCount, warn: warnCount } = countBySeverity(allFlags);
+  // Record-level flags are shown in their own banner; counting them here made
+  // a failed extraction report "1 field to verify" when no field was involved.
+  const fieldFlags = [
+    ...flags.filter((f) => f.field !== RECORD_FIELD),
+    ...lineItems.flatMap((li) => li.flags),
+  ];
+  const { error: errorCount, warn: warnCount } = countBySeverity(fieldFlags);
 
   const reextractTitle = extracting
     ? job?.kind === 'reextract'
@@ -166,7 +172,18 @@ export const RecordDetail = () => {
                 </div>
               )}
 
-              {recordFlags.length > 0 && (
+              {extraction.status === 'failed' && (
+                <div className="mb-4">
+                  <FailureNotice extraction={extraction} />
+                </div>
+              )}
+
+              {/* On a failed extraction the notice above already explains what
+                  happened, in more detail and more accurately. Showing the
+                  record-level flags too repeated it, and the generic
+                  "couldn't read it as a number" wording is wrong when nothing
+                  was read at all. */}
+              {extraction.status !== 'failed' && recordFlags.length > 0 && (
                 <div className="mb-4 rounded-lg border border-stone-200 bg-white p-3">
                   <FlagList flags={recordFlags} />
                 </div>
@@ -235,12 +252,6 @@ export const RecordDetail = () => {
                 <ExtractionLog extraction={extraction} />
               </section>
 
-              {extraction.status === 'failed' && (
-                <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-relaxed text-red-800">
-                  This extraction failed. Whatever appears above is unverified — check every
-                  value against the document, or re-extract.
-                </p>
-              )}
             </>
           )}
         </div>
