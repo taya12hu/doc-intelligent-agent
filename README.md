@@ -11,6 +11,15 @@ be confirmed is flagged for review rather than silently accepted.
 The reviewer sees the original document beside the extracted record, with each flagged field
 marked and the reason stated in plain language.
 
+**Live demo: [doc-intelligent-agent.onrender.com](https://doc-intelligent-agent.onrender.com)** —
+try one of the four bundled samples from the upload page.
+
+Two things to expect from the hosted version. It runs on a free instance that sleeps after a
+period of inactivity, so the first request can take around a minute to wake before extraction
+even starts. And it shares one Gemini free-tier key, capped at 20 requests per day across all
+visitors — roughly ten extractions. Once that is spent, uploads report the quota failure rather
+than a result. Running it locally avoids both.
+
 ## Features
 
 - PDF and Excel upload, handling both text-based and scanned PDFs
@@ -225,6 +234,22 @@ including deliberately hard ones. Results on the scanned sample vary between run
 - Calibrate the review score against a labelled dataset.
 - Return source regions per field and highlight them in the viewer.
 - Add a second LLM provider behind the existing interface.
+
+## Deployment
+
+Deployed as a **single service**: `npm run build` produces the frontend, and Express serves it
+from the same origin as the API. The client calls relative `/api` paths, so same-origin serving
+avoids both CORS and having to bake an API URL into the frontend at build time — which would
+otherwise need to be known before the API existed.
+
+| | |
+|---|---|
+| Build | `npm install && npm run build` |
+| Start | `npm start` |
+| Required | The same environment variables as local setup |
+
+One deployment-specific note: hosts that set `NODE_ENV=production` cause `npm install` to skip
+devDependencies, which leaves the build without Vite. Setting `NPM_CONFIG_INCLUDE=dev` fixes it.
 
 ## Project Structure
 
