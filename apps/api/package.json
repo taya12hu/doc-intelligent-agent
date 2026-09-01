@@ -27,7 +27,8 @@
     "pdfjs-dist": "^6.3.289",
     "postgres": "^3.4.9",
     "xlsx": "^0.18.5",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
