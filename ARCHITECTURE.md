@@ -167,7 +167,7 @@ wrong rather than merely unstable.
 | Reconciliation, stage 1 | Sum of line totals against the stated subtotal |
 | Reconciliation, stage 2 | Subtotal minus discount plus tax against the grand total |
 | Row arithmetic | Quantity times unit price against the row total |
-| Missing fields | Nulls in vendor, invoice number, date or grand total |
+| Missing fields | Nulls in vendor, invoice number, date or grand total — an error, since a record missing these is not usable. A blank line-item cell is only a warning. |
 | Illegible source | Fields the model reported as unreadable |
 | Ambiguous date | Printed dates where both components could be the month |
 | Implausible values | Negative totals, unreasonable quantities, out-of-range dates, order-of-magnitude mismatches |
@@ -191,6 +191,11 @@ it: a model's assessment of its own output is not evidence.
 
 The weights are hand-chosen, not fitted to labelled data. A score of 0.85 does not mean an 85%
 chance of being correct; it means fewer and less severe flags than one scoring 0.5.
+
+Severity is therefore load-bearing, and getting it wrong distorts the ordering. Missing required
+fields were warnings until a real record exposed the consequence: a document from which nothing
+was extracted scored higher than a scan that had read most of its fields correctly, because five
+warnings cost less than one error plus a legibility penalty. They are errors now.
 
 Status is derived from the flags themselves, not the score:
 

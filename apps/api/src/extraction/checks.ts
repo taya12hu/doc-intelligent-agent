@@ -184,17 +184,43 @@ export const checkRowArithmetic = (invoice: Invoice): FieldFlag[] => {
 
 // ── presence and legibility ───────────────────────────────────────────
 
-export const checkMissingRequired = (invoice: Invoice, derived: DerivedTotal[]): FieldFlag[] => {
+/**
+ * Missing values.
+ *
+ * Severity depends on WHAT is missing, not on the fact that something is.
+ *
+ * A required field — vendor, invoice number, date, grand total — is an error.
+ * These were warnings, and that produced a score that ranked records
+ * backwards: a document where nothing at all was extracted scored 0.75 (five
+ * warnings) while a scan that correctly read the vendor, the line items and
+ * the subtotal scored 0.42, because its unreadable total was an error and the
+ * legibility multiplier applied on top. An empty record should never outrank
+ * a mostly-correct one.
+ *
+ * A blank line-item cell stays a warning. It is usually one hole in an
+ * otherwise good invoice and is frequently recoverable from the row's own
+ * arithmetic, so it does not say the record is untrustworthy.
+ */
+export const checkMissingRequired = (
+  invoice: Invoice,
+  derived: DerivedTotal[],
+  illegibleFields: readonly string[] = [],
+): FieldFlag[] => {
   const flags: FieldFlag[] = [];
+  const illegible = new Set(illegibleFields);
 
   for (const field of REQUIRED_INVOICE_FIELDS) {
-    if (invoice[field] === null) {
-      flags.push(flag(field, 'missing'));
-    }
+    if (invoice[field] !== null) continue;
+    // "Could not read it" is the more specific account of the same problem.
+    // Reporting both would penalise one field twice for one underlying cause.
+    if (illegible.has(field)) continue;
+    flags.push(flag(field, 'missing', undefined, 'error'));
   }
 
   if (invoice.lineItems.length === 0) {
-    flags.push(flag('lineItems', 'missing', 'no line items were found on the document'));
+    flags.push(
+      flag('lineItems', 'missing', 'no line items were found on the document', 'error'),
+    );
   }
 
   const derivedByRow = new Map(derived.map((d) => [d.row, d.value]));
@@ -312,7 +338,7 @@ export const runChecks = (ctx: CheckContext): FieldFlag[] => {
   const derived = deriveMissingLineTotals(invoice);
 
   const flags: FieldFlag[] = [
-    ...checkMissingRequired(invoice, derived),
+    ...checkMissingRequired(invoice, derived, meta.illegibleFields),
     ...checkIllegible(meta),
     ...checkReconciliationStage1(invoice, derived),
     ...checkReconciliationStage2(invoice),

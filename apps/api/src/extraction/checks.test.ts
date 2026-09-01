@@ -1,6 +1,7 @@
 import type { ExtractionMeta, Invoice } from '@dia/shared';
 import { describe, expect, it } from 'vitest';
 import { ACME, NORTHWIND, ZENITH } from '../../../../samples/generate/src/data.js';
+import { deriveStatus, scoreConfidence } from './confidence.js';
 import {
   checkImplausible,
   checkReconciliationStage1,
@@ -169,6 +170,69 @@ describe('implausible values', () => {
     invoice.lineItems[0]!.quantity = 5_000_000;
     const flags = checkImplausible(invoice);
     expect(flags).toHaveLength(2);
+  });
+});
+
+describe('missing-field severity', () => {
+  const blank = (): Invoice => ({
+    vendorName: null,
+    invoiceNumber: null,
+    invoiceDate: null,
+    currency: null,
+    lineItems: [],
+    subtotal: null,
+    discountTotal: null,
+    taxTotal: null,
+    grandTotal: null,
+  });
+
+  it('treats a missing REQUIRED field as an error', () => {
+    const invoice = { ...invoiceOf(ACME), grandTotal: null };
+    const f = runChecks(ctx(invoice)).find(
+      (x) => x.field === 'grandTotal' && x.reason === 'missing',
+    );
+    expect(f?.severity).toBe('error');
+  });
+
+  it('leaves a blank line-item cell as a warning', () => {
+    // One hole in an otherwise good invoice, and usually recoverable from the
+    // row's own arithmetic — it does not make the record untrustworthy.
+    const f = runChecks(ctx(invoiceOf(ZENITH))).find(
+      (x) => x.field === 'lineItems[4].lineTotal' && x.reason === 'missing',
+    );
+    expect(f?.severity).toBe('warn');
+  });
+
+  it('leaves an INFERRED missing tax or discount row as a warning', () => {
+    // Deduced from an unexplained delta rather than observed as absent.
+    const invoice = { ...invoiceOf(ACME), taxTotal: null };
+    const f = checkReconciliationStage2(invoice).find((x) => x.field === 'taxTotal');
+    expect(f?.severity).toBe('warn');
+  });
+
+  it('does not report a field as both missing and illegible', () => {
+    // "Could not read it" is the more specific account of the same problem;
+    // both would penalise one field twice for one cause.
+    const invoice = { ...invoiceOf(ACME), grandTotal: null };
+    const flags = runChecks(ctx(invoice, { illegibleFields: ['grandTotal'] }));
+    const onGrandTotal = flags.filter((x) => x.field === 'grandTotal');
+    expect(onGrandTotal.map((x) => x.reason)).toContain('illegible_source');
+    expect(onGrandTotal.map((x) => x.reason)).not.toContain('missing');
+  });
+
+  it('ranks an empty extraction BELOW a mostly-correct one', () => {
+    // The bug this severity change fixes. A record with nothing extracted
+    // used to score 0.75 (five warnings) while a scan that read the vendor,
+    // line items and subtotal correctly scored 0.42.
+    const emptyFlags = runChecks(ctx(blank()));
+    const emptyScore = scoreConfidence(emptyFlags, 1, false);
+
+    const partial = { ...invoiceOf(ACME), grandTotal: null };
+    const partialFlags = runChecks(ctx(partial, { legibility: 0.6 }));
+    const partialScore = scoreConfidence(partialFlags, 0.6, false);
+
+    expect(emptyScore).toBeLessThan(partialScore);
+    expect(deriveStatus(emptyFlags, true)).toBe('failed');
   });
 });
 

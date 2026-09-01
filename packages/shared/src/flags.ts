@@ -64,6 +64,10 @@ export type FieldFlag = z.infer<typeof FieldFlagSchema>;
  * the field gets an amber ring or a red one.
  */
 export const SEVERITY_BY_REASON: Record<FlagReason, FlagSeverity> = {
+  // Default only. A missing REQUIRED field is raised as an error at the call
+  // site in checks.ts — this default covers the milder uses: a blank
+  // line-item cell, and a tax or discount row inferred from an unexplained
+  // delta rather than observed as absent.
   missing: 'warn',
   unparseable: 'error',
   extraction_failed: 'error',
